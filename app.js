@@ -434,3 +434,460 @@ function saveExecEditors(eid){const e=state.executions.find(x=>x.id===eid);if(!e
 function openExec(id){const e=state.executions.find(x=>x.id===id);if(!e)return;drawer(`<div class="drawer-head"><h2>${esc(e.templateName)}</h2><button class="ghost-btn" onclick="saveExecEditors('${e.id}');closeDrawer()">✕</button></div><div class="muted">${e.date} · ${esc(e.environment||'')}</div>${e.steps.map((s,i)=>`<div class="sop-step ${s.completedAt?'completed':s.startedAt?'running':''}"><div class="item-row"><b>${i+1}. ${esc(s.title)}</b><span class="item-meta">Start ${fmtTime(s.startedAt)} · Done ${fmtTime(s.completedAt)} · ⏱ ${s.startedAt?msToText((s.completedAt||Date.now())-s.startedAt):'-'}</span></div>${richEditor(`execRich_${s.id}`,s.memoHtml||s.noteHtml||'','执行记录、截图、checkbox…')}<div class="mini-actions">${!s.startedAt?`<button class="icon-btn" title="Start" onclick="saveExecEditors('${e.id}');startExecStep('${e.id}','${s.id}')">▶</button>`:!s.completedAt?`<button class="icon-btn" title="Complete" onclick="saveExecEditors('${e.id}');finishExecStep('${e.id}','${s.id}')">✓</button>`:''}</div></div>`).join('')}<div class="modal-actions"><button class="ghost-btn" onclick="saveExecEditors('${e.id}');saveState().then(()=>toast('已保存'))">保存</button><button class="primary-btn" onclick="saveExecEditors('${e.id}');finishExec('${e.id}')">完成整个作业</button></div>`);(e.steps||[]).forEach(s=>wireImageDrop(null,`execRich_${s.id}`))}
 
 /* ======================= END V5 OVERRIDES ======================= */
+
+
+/* ======================= V6 OVERRIDES ======================= */
+let archiveViewQuery='';
+
+function migrateV6(){
+  state.routineTemplates??=[];
+  state.projectTemplates??=[];
+  state.memoTemplates??=[];
+  state.kanbanTemplates??=[];
+  state.kanbanRecurring??=[];
+  (state.kanbanColumns||[]).forEach((c,i)=>{
+    c.bgColor??=['#eef1f6','#eef1f6','#eef1f6','#eef1f6','#eef1f6'][i%5];
+    c.cardColor??='#ffffff';
+  });
+  (state.kanban||[]).forEach(t=>{
+    t.archived??=false;
+    t.plannedStartAt??='';
+    t.cardColor??='';
+  });
+  (state.kanbanTemplates||[]).forEach(t=>{t.plannedStartAt??='';t.dueAt??=''});
+  (state.projects||[]).forEach(p=>{p.templateName??=''});
+}
+async function loadState(){
+  await openDB();
+  state=await dbGet('state');
+  if(!state)state=structuredClone(DEFAULT);
+  migrate();migrateV5();migrateV6();
+  ensureRecurringKanban();
+  await saveState();
+}
+
+/* ---------- navigation ---------- */
+function goPage(n){
+  $$('.page').forEach(x=>x.classList.remove('active'));
+  const page=$(`#page-${n}`); if(page)page.classList.add('active');
+  $$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.page===n));
+  $('#pageTitle').textContent=({
+    today:'Today',routine:'Routine',projects:'Projects',sop:'SOP',
+    history:'Execution History',kanban:'Kanban',memo:'Memo',
+    templates:'Templates',settings:'Settings'
+  })[n]||n;
+  renderPage(n);
+}
+function renderPage(n){
+  ({
+    today:renderToday,routine:renderRoutine,projects:renderProjects,
+    sop:renderSOP,history:renderHistory,kanban:renderKanban,
+    memo:renderMemo,templates:renderTemplates,settings:renderSettings
+  }[n]||(()=>{}))();
+}
+
+/* ---------- column/card colors ---------- */
+function columnForCard(t){return state.kanbanColumns.find(c=>c.id===t.status)}
+function cardColorFor(t,c){
+  if(t.completedAt || String(c?.name||'').toUpperCase()==='DONE')return '#eeeeef';
+  return t.cardColor || c?.cardColor || '#ffffff';
+}
+function renameKanbanColumn(id){
+  const c=state.kanbanColumns.find(x=>x.id===id); if(!c)return;
+  modal(`<h2>列设置</h2>
+    <div class="form-field"><label>列名称</label><input id="colName" value="${esc(c.name)}"></div>
+    <div class="form-row">
+      <div class="form-field"><label>列背景</label><input id="colBg" type="color" value="${esc(c.bgColor||'#eef1f6')}"></div>
+      <div class="form-field"><label>卡片背景</label><input id="colCard" type="color" value="${esc(c.cardColor||'#ffffff')}"></div>
+    </div>
+    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveColumnSettings('${id}')">保存</button></div>`);
+}
+async function saveColumnSettings(id){
+  const c=state.kanbanColumns.find(x=>x.id===id);if(!c)return;
+  c.name=$('#colName').value.trim()||c.name;
+  c.bgColor=$('#colBg').value;c.cardColor=$('#colCard').value;
+  await saveState();closeModal();renderKanban();
+}
+
+/* ---------- compact kanban cards ---------- */
+function taskQuickTree(tasks,ownerType,ownerId,depth=0){
+  return (tasks||[]).map(t=>`<div class="sub-inline nested-${Math.min(depth,5)}">
+    <input type="checkbox" ${t.done||t.completedAt?'checked':''} onchange="toggleQuickTask('${ownerType}','${ownerId}','${t.id}',this.checked)">
+    <span class="sub-name">${depth?'<span class="tree-branch">↳</span> ':''}${esc(t.text||t.title)}</span>
+    ${!t.startedAt?`<button class="micro-btn" title="Start" onclick="startQuickTask('${ownerType}','${ownerId}','${t.id}')">▶</button>`:`<span class="micro-time">${fmtTime(t.startedAt)}${t.completedAt?'→'+fmtTime(t.completedAt):''}</span>`}
+    ${t.dueAt?`<span class="micro-due ${dueClass(t.dueAt)}">${dueText(t.dueAt)}</span>`:''}
+  </div>${taskQuickTree(t.children||[],ownerType,ownerId,depth+1)}`).join('');
+}
+function kanbanMiniActions(t){
+  const canArchive=!!t.completedAt || String(columnForCard(t)?.name||'').toUpperCase()==='DONE';
+  return `<div class="mini-actions card-corner-actions">
+    ${!t.startedAt?`<button class="icon-btn" title="Start" onclick="event.stopPropagation();startKanbanTask('${t.id}')">▶</button>`:''}
+    <button class="icon-btn" title="${t.showMemo?'隐藏':'显示'} Memo" onclick="event.stopPropagation();toggleCardMemo('${t.id}')">${t.showMemo?'🙈':'👁'}</button>
+    <button class="icon-btn" title="保存为模板" onclick="event.stopPropagation();saveKanbanTemplate('${t.id}')">☆</button>
+    <button class="icon-btn" title="定期重复" onclick="event.stopPropagation();openRepeatModal('${t.id}')">🔁</button>
+    ${canArchive?`<button class="icon-btn" title="归档" onclick="event.stopPropagation();archiveKanban('${t.id}')">📦</button>`:''}
+  </div>`;
+}
+function cardHtml(t,c=null){
+  c=c||columnForCard(t);
+  const n=countTasks(t.checks||[]);
+  const search=((t.title||'')+' '+(t.tags||[]).join(' ')).toLowerCase();
+  return `<div class="task-card ${t.completedAt?'done-card':''}" data-search="${esc(search)}" draggable="true"
+    style="background:${cardColorFor(t,c)}"
+    ondragstart="event.dataTransfer.setData('text/plain','${t.id}')">
+    ${kanbanMiniActions(t)}
+    <div class="card-topline">
+      <input class="main-check" type="checkbox" ${t.completedAt?'checked':''} onclick="event.stopPropagation()" onchange="finishKanbanTask('${t.id}',this.checked)">
+      <div class="card-body" onclick="openKanbanCard('${t.id}')">
+        <div class="item-title">${esc(t.title)}</div>
+        <div class="tags">${tagHtml(t.tags)}</div>
+        <div class="item-meta">Start ${fmtTime(t.startedAt)} · Done ${fmtTime(t.completedAt)} · ${n.done}/${n.all} 子任务</div>
+        ${t.plannedStartAt?`<span class="micro-due">计划开始 ${esc(t.plannedStartAt.replace('T',' '))}</span>`:''}
+        ${t.dueAt?`<span class="micro-due ${dueClass(t.dueAt)}">${dueText(t.dueAt)}</span>`:''}
+      </div>
+    </div>
+    ${t.showMemo&&t.html?`<div class="rich-preview compact-preview">${t.html}</div>`:''}
+    ${n.all?`<div class="sub-list">${taskQuickTree(t.checks,'kanban',t.id)}</div>`:''}
+  </div>`;
+}
+
+/* ---------- filter without rerender ---------- */
+function filterKanbanVisible(v){
+  kanbanFilter=v||'';
+  const q=kanbanFilter.trim().toLowerCase();
+  document.querySelectorAll('#page-kanban .task-card').forEach(el=>{
+    el.style.display=(!q || (el.dataset.search||'').includes(q))?'':'none';
+  });
+}
+
+/* ---------- archive ---------- */
+async function archiveKanban(id){
+  const t=state.kanban.find(x=>x.id===id);if(!t)return;
+  t.archived=true;await saveState();renderKanban();toast('已归档');
+}
+async function restoreKanban(id){
+  const t=state.kanban.find(x=>x.id===id);if(!t)return;
+  t.archived=false;await saveState();openArchive();
+}
+async function permanentlyDeleteKanban(id){
+  if(!confirm('永久删除这张已归档卡片？'))return;
+  state.kanban=state.kanban.filter(x=>x.id!==id);await saveState();openArchive();
+}
+function openArchive(){
+  const rows=state.kanban.filter(x=>x.archived).filter(x=>!archiveViewQuery||x.title.toLowerCase().includes(archiveViewQuery.toLowerCase()));
+  modal(`<h2>📦 Kanban 归档</h2>
+    <input placeholder="搜索归档" value="${esc(archiveViewQuery)}" oninput="archiveViewQuery=this.value;openArchive()">
+    <div class="list" style="margin-top:12px">${rows.map(t=>`<div class="item"><div class="item-row"><div><b>${esc(t.title)}</b><div class="item-meta">Done ${fmtTime(t.completedAt)}</div></div><div><button class="small-btn" onclick="restoreKanban('${t.id}')">恢复</button> <button class="danger-btn" onclick="permanentlyDeleteKanban('${t.id}')">删除</button></div></div></div>`).join('')||'<div class="empty">没有归档内容</div>'}</div>
+    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">关闭</button></div>`);
+}
+
+/* ---------- yearly recurrence ---------- */
+function recurrenceKey(rule,d=new Date()){
+  const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0');
+  if(rule.frequency==='daily')return d.toISOString().slice(0,10);
+  if(rule.frequency==='weekly'){
+    const x=new Date(d);x.setDate(d.getDate()-((d.getDay()+6)%7));
+    return x.toISOString().slice(0,10);
+  }
+  if(rule.frequency==='yearly')return String(y);
+  return `${y}-${m}`;
+}
+function recurrenceDue(rule,d=new Date()){
+  if(rule.frequency==='daily')return true;
+  if(rule.frequency==='weekly')return d.getDay()===Number(rule.weekday||1);
+  if(rule.frequency==='yearly'){
+    const m=d.getMonth()+1, targetM=Number(rule.monthOfYear||1), day=Number(rule.dayOfMonth||1);
+    return m>targetM || (m===targetM && d.getDate()>=day);
+  }
+  return d.getDate()>=Number(rule.dayOfMonth||1);
+}
+function openRepeatModal(id){
+  const t=state.kanban.find(x=>x.id===id);if(!t)return;
+  const r=state.kanbanRecurring.find(x=>x.sourceCardId===id)||{frequency:'monthly',dayOfMonth:1,monthOfYear:1,weekday:1,targetColumnId:t.status,enabled:true};
+  modal(`<h2>🔁 定期重复</h2>
+    <div class="form-field"><label>频率</label><select id="repFreq">
+      <option value="daily" ${r.frequency==='daily'?'selected':''}>每天</option>
+      <option value="weekly" ${r.frequency==='weekly'?'selected':''}>每周</option>
+      <option value="monthly" ${r.frequency==='monthly'?'selected':''}>每月</option>
+      <option value="yearly" ${r.frequency==='yearly'?'selected':''}>每年</option>
+    </select></div>
+    <div class="form-row">
+      <div class="form-field"><label>月份（每年时 1-12）</label><input id="repMonth" type="number" min="1" max="12" value="${r.monthOfYear||1}"></div>
+      <div class="form-field"><label>每月几日 / 每年几日</label><input id="repDay" type="number" min="1" max="31" value="${r.dayOfMonth||1}"></div>
+    </div>
+    <div class="form-field"><label>星期（每周时 0=日, 1=一 … 6=六）</label><input id="repWeek" type="number" min="0" max="6" value="${r.weekday??1}"></div>
+    <div class="form-field"><label>自动生成到哪一列</label><select id="repCol">${state.kanbanColumns.map(c=>`<option value="${c.id}" ${r.targetColumnId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div>
+    <label class="checkbox-line"><input id="repEnabled" type="checkbox" ${r.enabled!==false?'checked':''}>启用</label>
+    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRepeatRule('${id}')">保存</button></div>`);
+}
+async function saveRepeatRule(id){
+  const t=state.kanban.find(x=>x.id===id);let r=state.kanbanRecurring.find(x=>x.sourceCardId===id);
+  if(!r){r={id:uid(),sourceCardId:id};state.kanbanRecurring.push(r)}
+  Object.assign(r,{
+    name:t.title,frequency:$('#repFreq').value,
+    monthOfYear:+$('#repMonth').value||1,dayOfMonth:+$('#repDay').value||1,
+    weekday:+$('#repWeek').value||1,targetColumnId:$('#repCol').value,
+    enabled:$('#repEnabled').checked,snapshot:recurringSnapshotFromCard(t)
+  });
+  ensureRecurringKanban();await saveState();closeModal();renderKanban();toast('定期重复已保存');
+}
+function ensureRecurringKanban(){
+  let changed=false;const now=new Date();
+  for(const r of state.kanbanRecurring||[]){
+    if(!r.enabled||!recurrenceDue(r,now))continue;
+    const key=recurrenceKey(r,now);if(r.lastGeneratedKey===key)continue;
+    const snap=r.snapshot||{};
+    const day=String(now.getDate()).padStart(2,'0'),mon=String(now.getMonth()+1).padStart(2,'0');
+    const card={
+      id:uid(),title:snap.title||r.name||'定期任务',
+      status:r.targetColumnId||state.kanbanColumns[0]?.id||'todo',
+      html:snap.html||'',checks:clearTaskTimes(snap.checks||[]),images:[],
+      tags:[...(snap.tags||[])],startedAt:null,completedAt:null,dueAt:'',
+      plannedStartAt:`${now.getFullYear()}-${mon}-${day}T09:00`,
+      showMemo:false,archived:false,recurrenceRuleId:r.id,generatedKey:key,createdAt:Date.now()
+    };
+    card.html=mergeTasksIntoHtml(card.html,card.checks);
+    state.kanban.push(card);r.lastGeneratedKey=key;changed=true;
+  }return changed;
+}
+
+/* ---------- planned start ---------- */
+function openKanbanCard(id){
+  const t=state.kanban.find(x=>x.id===id)||{
+    id:'',title:'',status:state.kanbanColumns[0]?.id||'todo',html:'',checks:[],tags:[],
+    startedAt:null,completedAt:null,plannedStartAt:'',dueAt:'',showMemo:false,archived:false
+  };
+  const merged=mergeTasksIntoHtml(t.html,t.checks||[]);
+  drawer(`<div class="drawer-head"><div><h2 style="margin:0">${id?esc(t.title):'新建 Kanban 卡片'}</h2><div class="item-meta">实际开始 ${fmtTime(t.startedAt)} · 实际完成 ${fmtTime(t.completedAt)}</div></div><button class="ghost-btn" onclick="closeDrawer()">✕</button></div>
+    <div class="detail-grid"><div class="form-field"><label>标题</label><input id="kcTitle" value="${esc(t.title)}"></div><div class="form-field"><label>状态</label><select id="kcStatus">${state.kanbanColumns.map(c=>`<option value="${c.id}" ${t.status===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div></div>
+    <div class="detail-grid compact-fields"><div class="form-field"><label>预计开始</label><input type="datetime-local" id="kcPlanned" value="${esc(t.plannedStartAt||'')}"></div><div class="form-field"><label>预计完成</label><input type="datetime-local" id="kcDue" value="${esc(t.dueAt||'')}"></div></div>
+    <div class="form-field"><label>标签</label><input id="kcTags" value="${esc((t.tags||[]).join(', '))}"></div>
+    <h3>Memo / 作业说明</h3><div class="item-meta">☑ 子任务可以继续 +↳ 添加下级子任务。</div>
+    ${richEditor('kanbanRich',merged,'文字、任务、图片、链接可混排…')}
+    <div id="kanbanDrop" class="drop-zone">Ctrl+V 或拖图片到编辑框</div>
+    <div class="modal-actions">${id?`<button class="icon-btn footer-icon" title="保存为模板" onclick="saveKanbanTemplate('${t.id}')">☆</button><button class="icon-btn footer-icon" title="定期重复" onclick="openRepeatModal('${t.id}')">🔁</button><button class="danger-btn" onclick="deleteKanban('${t.id}')">删除</button>`:''}<button class="primary-btn" onclick="saveKanbanDrawer('${t.id}')">保存</button></div>`);
+  wireImageDrop('kanbanDrop','kanbanRich');
+}
+async function saveKanbanDrawer(id){
+  let t=id?state.kanban.find(x=>x.id===id):{id:uid(),images:[],startedAt:null,completedAt:null,showMemo:false,archived:false};
+  const tasks=collectInlineTasks('kanbanRich');
+  Object.assign(t,{
+    title:$('#kcTitle').value.trim(),status:$('#kcStatus').value,tags:splitTags($('#kcTags').value),
+    html:$('#kanbanRich').innerHTML,checks:tasks,plannedStartAt:$('#kcPlanned').value,dueAt:$('#kcDue').value
+  });
+  if(tasksAllDone(tasks)&&!t.completedAt){
+    if(!t.startedAt)t.startedAt=Date.now();t.completedAt=Date.now();
+    t.status=state.kanbanColumns.find(c=>String(c.name).toUpperCase()==='DONE')?.id||'done';
+  }
+  if(!id)state.kanban.push(t);
+  await saveState();closeDrawer();renderKanban();
+}
+
+/* ---------- calendar ---------- */
+function taskDate(t){
+  if(t.plannedStartAt)return new Date(t.plannedStartAt);
+  if(t.completedAt)return new Date(t.completedAt);
+  if(t.dueAt)return new Date(t.dueAt);
+  if(t.startedAt)return new Date(t.startedAt);
+  return null;
+}
+function kanbanCalendarItems(){
+  return state.kanban.map(t=>({id:t.id,title:t.title,date:taskDate(t),done:!!t.completedAt,archived:!!t.archived}));
+}
+function calendarModule(monthKey,items,onShiftName,compact=false){
+  const [y,m]=monthKey.split('-').map(Number),first=new Date(y,m-1,1),last=new Date(y,m,0),start=first.getDay();
+  let cells=['日','一','二','三','四','五','六'].map(x=>`<div class="cal-week">${x}</div>`);
+  for(let i=0;i<start;i++)cells.push('<div class="cal-day blank"></div>');
+  for(let day=1;day<=last.getDate();day++){
+    const ds=`${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    let hits=items.filter(x=>x.date&&x.date.toISOString().slice(0,10)===ds);
+    hits.sort((a,b)=>Number(a.done)-Number(b.done));
+    const events=hits.map(h=>`<button class="cal-event ${h.done?'done':''}" title="${esc(h.title)}" onclick="openKanbanCard('${h.id}')">${h.done?'✓ ':''}${esc(h.title)}</button>`).join('');
+    cells.push(`<div class="cal-day ${ds===todayISO()?'today':''}"><div class="cal-num">${day}</div><div class="cal-events-scroll">${events||''}</div></div>`);
+  }
+  return `<div class="calendar-card"><div class="cal-head"><button class="micro-btn" onclick="${onShiftName}(-1)">‹</button><b>${y}年${m}月</b><button class="micro-btn" onclick="${onShiftName}(1)">›</button></div><div class="calendar-v5">${cells.join('')}</div></div>`;
+}
+
+/* ---------- render kanban ---------- */
+function renderKanban(){
+  ensureRecurringKanban();
+  const cols=state.kanbanColumns, archivedCount=state.kanban.filter(x=>x.archived).length;
+  $('#page-kanban').innerHTML=`<div class="section-title"><h2>Kanban</h2><div>
+    <button class="ghost-btn" onclick="goPage('templates')">🧩 模板库</button>
+    <button class="ghost-btn" onclick="openArchive()">📦 归档 ${archivedCount?`(${archivedCount})`:''}</button>
+    <button class="ghost-btn" onclick="addKanbanColumn()">＋ 新列</button>
+    <button class="primary-btn" onclick="openKanbanCard()">＋ 新建卡片</button>
+  </div></div>
+  <div class="filterbar"><input id="kanbanFilterInput" placeholder="按标题 / 标签筛选" value="${esc(kanbanFilter)}" oninput="filterKanbanVisible(this.value)"></div>
+  <div class="kanban">${cols.map(c=>`<div class="kanban-col" style="background:${esc(c.bgColor||'#eef1f6')}" ondragover="event.preventDefault()" ondrop="dropTask(event,'${c.id}')">
+    <div class="kanban-col-head"><h3>${esc(c.name)}</h3><span><button class="icon-btn" title="左移" onclick="moveKanbanColumn('${c.id}',-1)">←</button><button class="icon-btn" title="右移" onclick="moveKanbanColumn('${c.id}',1)">→</button><button class="icon-btn" title="列设置 / 颜色" onclick="renameKanbanColumn('${c.id}')">⋯</button></span></div>
+    ${state.kanban.filter(x=>x.status===c.id&&!x.archived).map(t=>cardHtml(t,c)).join('')}
+  </div>`).join('')}</div>
+  <div class="card" style="margin-top:18px"><div class="section-title"><h2>📅 Kanban 日历 / 历史</h2><span class="muted">未完成在上，完成在下；格内可上下滚动</span></div>${calendarModule(kanbanCalMonth,kanbanCalendarItems(),'kanbanCalendarShift')}</div>`;
+  setTimeout(()=>filterKanbanVisible(kanbanFilter),0);
+}
+
+/* ---------- template snapshots ---------- */
+function cloneRoutineSnapshot(r){return{name:r.name,tags:[...(r.tags||[])],repeat:r.repeat,weekdays:[...(r.weekdays||[])],subtasks:(r.subtasks||[]).map(s=>({id:uid(),title:s.title}))}}
+function cloneProjectSnapshot(p){return{title:p.title,categoryId:p.categoryId||'',tags:[...(p.tags||[])],html:p.html||'',subtasks:clearTaskTimes(p.subtasks||[]),handoffs:structuredClone(p.handoffs||[]),reports:structuredClone(p.reports||[]),questions:structuredClone(p.questions||[]),investigations:structuredClone(p.investigations||[])}}
+function cloneMemoSnapshot(m){return{title:m.title,tags:[...(m.tags||[])],html:m.html||'',checks:structuredClone(m.checks||[]),images:structuredClone(m.images||[])}}
+
+async function saveRoutineAsTemplate(id){
+  const r=state.routines.find(x=>x.id===id);if(!r)return;const name=prompt('模板名称',r.name);if(!name)return;
+  state.routineTemplates.push({id:uid(),name,snapshot:cloneRoutineSnapshot(r),createdAt:Date.now()});await saveState();toast('Routine 模板已保存');
+}
+async function saveProjectAsTemplate(id){
+  const p=state.projects.find(x=>x.id===id);if(!p)return;const name=prompt('模板名称',p.title);if(!name)return;
+  state.projectTemplates.push({id:uid(),name,snapshot:cloneProjectSnapshot(p),createdAt:Date.now()});await saveState();toast('Project 模板已保存');
+}
+async function saveMemoAsTemplate(id){
+  const m=state.memos.find(x=>x.id===id);if(!m)return;const name=prompt('模板名称',m.title);if(!name)return;
+  state.memoTemplates.push({id:uid(),name,snapshot:cloneMemoSnapshot(m),createdAt:Date.now()});await saveState();toast('Memo 模板已保存');
+}
+
+/* ---------- routine template hooks ---------- */
+function renderRoutine(){
+  const due=state.routines.filter(r=>isRoutineDue(r,routineViewDate));
+  $('#page-routine').innerHTML=`<div class="card"><div class="section-title"><h2>Daily Routine</h2><div><button class="ghost-btn" onclick="goPage('templates')">🧩 模板库</button> <button class="primary-btn" onclick="openRoutineModal()">＋ 新建 Routine</button></div></div>
+    <div class="form-row"><div class="form-field"><label>查看日期</label><input type="date" value="${routineViewDate}" onchange="routineViewDate=this.value;renderRoutine()"></div><div class="item">${fmtDate(routineViewDate)}</div></div>
+    <div class="list" style="margin-top:14px">${due.map(r=>routineItem(r,routineViewDate)).join('')}</div></div>
+    <div class="card" style="margin-top:18px"><h2>Routine 管理</h2>${state.routines.map(r=>`<div class="item"><div class="item-row"><div><b>${esc(r.name)}</b><div class="tags">${tagHtml(r.tags)}</div><div class="item-meta">${repeatText(r)} · ${(r.subtasks||[]).length} 个子任务</div></div><div><button class="small-btn" onclick="saveRoutineAsTemplate('${r.id}')">☆ 模板</button> <button class="small-btn" onclick="openRoutineModal('${r.id}')">编辑</button></div></div></div>`).join('')}</div>`;
+}
+
+/* ---------- project template hook ---------- */
+function openProject(id){
+  const p=state.projects.find(x=>x.id===id);if(!p)return;
+  drawer(`<div class="drawer-head"><div><h2 style="margin:0">${esc(p.title)}</h2><div class="item-meta">实际开始 ${fmtTime(p.startedAt)} · 实际完成 ${fmtTime(p.completedAt)}</div><div class="tags">${tagHtml(p.tags)}</div></div><button class="ghost-btn" onclick="closeDrawer()">✕</button></div>
+    <div class="mini-actions" style="margin-top:10px">${!p.startedAt?`<button class="icon-btn" title="Start 主任务" onclick="startProject('${p.id}')">▶</button>`:''}<button class="icon-btn" title="完成主任务" onclick="finishProject('${p.id}',true)">✓</button><button class="icon-btn" title="保存为模板" onclick="saveProjectAsTemplate('${p.id}')">☆</button></div>
+    <div class="detail-grid"><div class="form-field"><label>标题</label><input id="pdTitle" value="${esc(p.title)}"></div><div class="form-field"><label>分类</label><select id="pdCat"><option value="">未分类</option>${state.projectCategories.map(c=>`<option value="${c.id}" ${p.categoryId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div></div>
+    <div class="detail-grid compact-fields"><div class="form-field"><label>预计完成</label><input type="datetime-local" id="pdDue" value="${esc(p.dueAt||'')}"></div><div class="form-field"><label>状态</label><select id="pdStatus"><option value="todo" ${p.status==='todo'?'selected':''}>TODO</option><option value="doing" ${p.status==='doing'?'selected':''}>DOING</option><option value="waiting" ${p.status==='waiting'?'selected':''}>WAITING</option><option value="done" ${p.status==='done'?'selected':''}>DONE</option></select></div></div>
+    <div class="form-field"><label>标签</label><input id="pdTags" value="${esc((p.tags||[]).join(', '))}"></div>
+    <h3>项目 Memo / 任务层级</h3>${richEditor('projectRich',mergeTasksIntoHtml(p.html,p.subtasks||[]),'可在任意位置插任务，任务内可继续 +↳ 添加下级任务…')}
+    <div id="projectDrop" class="drop-zone">Ctrl+V 或拖图片</div>${richNoteSection('交接 / 对接人员','handoffs',p)}${richNoteSection('汇报记录','reports',p)}${richNoteSection('被提出的问题','questions',p)}${richNoteSection('需要调查的地方','investigations',p)}
+    <div class="modal-actions"><button class="danger-btn" onclick="deleteProject('${p.id}')">删除项目</button><button class="primary-btn" onclick="saveProjectDrawer('${p.id}')">保存</button></div>`);
+  wireImageDrop('projectDrop','projectRich');['handoffs','reports','questions','investigations'].forEach(k=>(p[k]||[]).forEach(n=>wireImageDrop(`${k}Drop_${n.id}`,`${k}Rich_${n.id}`)));
+}
+
+/* ---------- memo template hook ---------- */
+function memoEditor(m){
+  return `<div class="form-row"><input id="memoTitle" value="${esc(m.title)}"><input id="memoTags" placeholder="标签" value="${esc((m.tags||[]).join(', '))}"></div>
+    <h3>内容</h3>${richEditor('memoRich',m.html,'Memo…')}
+    <h3>Checkbox / 子任务</h3><div id="memoChecks">${(m.checks||[]).map(checkRow).join('')}</div><button class="small-btn" onclick="addCheckRow('memoChecks')">＋ Checkbox</button>
+    <div id="memoDrop" class="drop-zone">Ctrl+V 粘贴截图，或拖图片到这里</div>${imageGrid(m.images,'memo',m.id)}
+    <div class="modal-actions"><button class="ghost-btn" onclick="saveMemoAsTemplate('${m.id}')">☆ 保存为模板</button><button class="danger-btn" onclick="deleteMemo('${m.id}')">删除</button><button class="primary-btn" onclick="saveMemo('${m.id}')">保存</button></div>`;
+}
+
+/* ---------- template library ---------- */
+function templateSection(title,type,items,renderItem){
+  return `<div class="card template-section"><div class="section-title"><h2>${title}</h2><span class="muted">${items.length} 个</span></div>${items.map(renderItem).join('')||'<div class="empty">还没有模板</div>'}</div>`;
+}
+function renderTemplates(){
+  $('#page-templates').innerHTML=`<div class="section-title"><h2>🧩 Template Library</h2><span class="muted">统一管理 Kanban / Routine / SOP / Project / Memo 模板</span></div>
+  <div class="grid grid-2 template-grid">
+    ${templateSection('📊 Kanban','kanban',state.kanbanTemplates,t=>`<div class="item"><div class="item-row"><div><b>${esc(t.name)}</b><div class="item-meta">${esc(t.title||'')}</div></div><div><button class="small-btn" onclick="applyKanbanTemplate('${t.id}')">使用</button> <button class="small-btn" onclick="editKanbanTemplate('${t.id}')">编辑</button> <button class="danger-btn" onclick="deleteTemplate('kanban','${t.id}')">删除</button></div></div></div>`)}
+    ${templateSection('🔁 Routine','routine',state.routineTemplates,t=>`<div class="item"><div class="item-row"><b>${esc(t.name)}</b><div><button class="small-btn" onclick="useRoutineTemplate('${t.id}')">使用</button> <button class="small-btn" onclick="editRoutineTemplate('${t.id}')">编辑</button> <button class="danger-btn" onclick="deleteTemplate('routine','${t.id}')">删除</button></div></div></div>`)}
+    ${templateSection('📚 SOP','sop',state.sopTemplates,t=>`<div class="item"><div class="item-row"><div><b>${esc(t.name)}</b><div class="item-meta">${esc(t.category||'')}</div></div><div><button class="small-btn" onclick="startSop('${t.id}')">使用</button> <button class="small-btn" onclick="openSopTemplate('${t.id}')">编辑</button> <button class="danger-btn" onclick="deleteTemplate('sop','${t.id}')">删除</button></div></div></div>`)}
+    ${templateSection('🗂 Project','project',state.projectTemplates,t=>`<div class="item"><div class="item-row"><b>${esc(t.name)}</b><div><button class="small-btn" onclick="useProjectTemplate('${t.id}')">使用</button> <button class="small-btn" onclick="editProjectTemplate('${t.id}')">编辑</button> <button class="danger-btn" onclick="deleteTemplate('project','${t.id}')">删除</button></div></div></div>`)}
+    ${templateSection('📝 Memo','memo',state.memoTemplates,t=>`<div class="item"><div class="item-row"><b>${esc(t.name)}</b><div><button class="small-btn" onclick="useMemoTemplate('${t.id}')">使用</button> <button class="small-btn" onclick="editMemoTemplate('${t.id}')">编辑</button> <button class="danger-btn" onclick="deleteTemplate('memo','${t.id}')">删除</button></div></div></div>`)}
+  </div>`;
+}
+async function deleteTemplate(type,id){
+  if(!confirm('删除这个模板？'))return;
+  if(type==='kanban')state.kanbanTemplates=state.kanbanTemplates.filter(x=>x.id!==id);
+  if(type==='routine')state.routineTemplates=state.routineTemplates.filter(x=>x.id!==id);
+  if(type==='project')state.projectTemplates=state.projectTemplates.filter(x=>x.id!==id);
+  if(type==='memo')state.memoTemplates=state.memoTemplates.filter(x=>x.id!==id);
+  if(type==='sop')state.sopTemplates=state.sopTemplates.filter(x=>x.id!==id);
+  await saveState();renderTemplates();
+}
+
+/* Kanban template editor */
+function editKanbanTemplate(id){
+  const t=state.kanbanTemplates.find(x=>x.id===id);if(!t)return;
+  modal(`<h2>编辑 Kanban 模板</h2><div class="form-row"><input id="ktName" value="${esc(t.name)}" placeholder="模板名称"><input id="ktTitle" value="${esc(t.title||'')}" placeholder="卡片标题"></div><input id="ktTags" value="${esc((t.tags||[]).join(', '))}" placeholder="标签">${richEditor('ktRich',mergeTasksIntoHtml(t.html,t.checks||[]),'模板 Memo / 子任务…')}<div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveKanbanTemplateEdit('${id}')">保存</button></div>`);
+}
+async function saveKanbanTemplateEdit(id){
+  const t=state.kanbanTemplates.find(x=>x.id===id);if(!t)return;
+  t.name=$('#ktName').value.trim();t.title=$('#ktTitle').value.trim();t.tags=splitTags($('#ktTags').value);t.html=$('#ktRich').innerHTML;t.checks=clearTaskTimes(collectInlineTasks('ktRich'));
+  await saveState();closeModal();renderTemplates();
+}
+
+/* Routine template editor/use */
+function editRoutineTemplate(id){
+  const t=state.routineTemplates.find(x=>x.id===id),r=t?.snapshot;if(!r)return;
+  modal(`<h2>编辑 Routine 模板</h2><input id="rtName" value="${esc(t.name)}" placeholder="模板名称"><div class="form-row"><input id="rtTitle" value="${esc(r.name)}" placeholder="Routine 名称"><input id="rtTags" value="${esc((r.tags||[]).join(', '))}" placeholder="标签"></div><div class="form-field"><label>重复</label><select id="rtRepeat"><option value="daily" ${r.repeat==='daily'?'selected':''}>每天</option><option value="weekdays" ${r.repeat==='weekdays'?'selected':''}>工作日</option><option value="custom" ${r.repeat==='custom'?'selected':''}>指定星期</option></select></div><div class="form-field"><label>子任务（每行一个）</label><textarea id="rtSubs">${esc((r.subtasks||[]).map(x=>x.title).join('\n'))}</textarea></div><div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRoutineTemplateEdit('${id}')">保存</button></div>`);
+}
+async function saveRoutineTemplateEdit(id){
+  const t=state.routineTemplates.find(x=>x.id===id);if(!t)return;
+  t.name=$('#rtName').value.trim();t.snapshot.name=$('#rtTitle').value.trim();t.snapshot.tags=splitTags($('#rtTags').value);t.snapshot.repeat=$('#rtRepeat').value;t.snapshot.subtasks=$('#rtSubs').value.split('\n').map(x=>x.trim()).filter(Boolean).map(title=>({id:uid(),title}));
+  await saveState();closeModal();renderTemplates();
+}
+async function useRoutineTemplate(id){
+  const t=state.routineTemplates.find(x=>x.id===id);if(!t)return;const r=structuredClone(t.snapshot);r.id=uid();r.subtasks=(r.subtasks||[]).map(s=>({...s,id:uid()}));state.routines.push(r);await saveState();goPage('routine');toast('已从模板创建 Routine');
+}
+
+/* Project template editor/use */
+function editProjectTemplate(id){
+  const t=state.projectTemplates.find(x=>x.id===id),p=t?.snapshot;if(!p)return;
+  modal(`<h2>编辑 Project 模板</h2><input id="ptName" value="${esc(t.name)}" placeholder="模板名称"><div class="form-row"><input id="ptTitle" value="${esc(p.title)}" placeholder="项目标题"><input id="ptTags" value="${esc((p.tags||[]).join(', '))}" placeholder="标签"></div>${richEditor('ptRich',mergeTasksIntoHtml(p.html,p.subtasks||[]),'项目模板内容…')}<div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveProjectTemplateEdit('${id}')">保存</button></div>`);
+}
+async function saveProjectTemplateEdit(id){
+  const t=state.projectTemplates.find(x=>x.id===id);if(!t)return;
+  t.name=$('#ptName').value.trim();t.snapshot.title=$('#ptTitle').value.trim();t.snapshot.tags=splitTags($('#ptTags').value);t.snapshot.html=$('#ptRich').innerHTML;t.snapshot.subtasks=clearTaskTimes(collectInlineTasks('ptRich'));
+  await saveState();closeModal();renderTemplates();
+}
+async function useProjectTemplate(id){
+  const t=state.projectTemplates.find(x=>x.id===id);if(!t)return;const s=structuredClone(t.snapshot);
+  const p={...s,id:uid(),status:'todo',startedAt:null,completedAt:null,dueAt:'',createdAt:Date.now(),subtasks:clearTaskTimes(s.subtasks||[])};
+  p.html=mergeTasksIntoHtml(p.html,p.subtasks);state.projects.unshift(p);await saveState();goPage('projects');setTimeout(()=>openProject(p.id),0);
+}
+
+/* Memo template editor/use */
+function editMemoTemplate(id){
+  const t=state.memoTemplates.find(x=>x.id===id),m=t?.snapshot;if(!m)return;
+  modal(`<h2>编辑 Memo 模板</h2><input id="mtName" value="${esc(t.name)}" placeholder="模板名称"><div class="form-row"><input id="mtTitle" value="${esc(m.title)}" placeholder="Memo 标题"><input id="mtTags" value="${esc((m.tags||[]).join(', '))}" placeholder="标签"></div>${richEditor('mtRich',m.html||'','Memo 模板内容…')}<div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveMemoTemplateEdit('${id}')">保存</button></div>`);
+}
+async function saveMemoTemplateEdit(id){
+  const t=state.memoTemplates.find(x=>x.id===id);if(!t)return;
+  t.name=$('#mtName').value.trim();t.snapshot.title=$('#mtTitle').value.trim();t.snapshot.tags=splitTags($('#mtTags').value);t.snapshot.html=$('#mtRich').innerHTML;
+  await saveState();closeModal();renderTemplates();
+}
+async function useMemoTemplate(id){
+  const t=state.memoTemplates.find(x=>x.id===id);if(!t)return;const s=structuredClone(t.snapshot);
+  const m={...s,id:uid(),updatedAt:Date.now()};state.memos.unshift(m);activeMemoId=m.id;await saveState();goPage('memo');
+}
+
+/* ---------- refresh kanban template snapshots to preserve hierarchy ---------- */
+async function saveKanbanTemplate(id){
+  const t=state.kanban.find(x=>x.id===id);if(!t)return;const name=prompt('模板名称',t.title);if(!name)return;
+  state.kanbanTemplates.push({
+    id:uid(),name,title:t.title,html:t.html,tags:[...(t.tags||[])],
+    checks:clearTaskTimes(t.checks||[]),plannedStartAt:'',dueAt:'',createdAt:Date.now()
+  });
+  await saveState();toast('已保存为模板');
+}
+async function applyKanbanTemplate(id){
+  const x=state.kanbanTemplates.find(t=>t.id===id);if(!x)return;
+  const checks=clearTaskTimes(x.checks||[]);
+  const t={id:uid(),title:x.title,status:state.kanbanColumns[0]?.id||'todo',html:x.html,tags:[...(x.tags||[])],checks,images:[],startedAt:null,completedAt:null,plannedStartAt:'',dueAt:'',showMemo:false,archived:false,createdAt:Date.now()};
+  t.html=mergeTasksIntoHtml(t.html,t.checks);state.kanban.push(t);await saveState();closeModal();goPage('kanban');setTimeout(()=>openKanbanCard(t.id),0);
+}
+
+/* ---------- Today card rendering uses current columns/colors, hides archived ---------- */
+function renderToday(){
+  ensureRecurringKanban();
+  const d=todayISO(),rs=state.routines.filter(r=>isRoutineDue(r,d)),done=rs.filter(r=>getRLog(d,r.id)?.status==='done').length;
+  const activeP=state.projects.filter(p=>p.status!=='done'&&!p.completedAt);
+  const activeK=state.kanban.filter(x=>!x.completedAt&&!x.archived&&String(columnForCard(x)?.name||x.status).toUpperCase()!=='DONE');
+  const recentProjects=[...state.projects].sort((a,b)=>(b.createdAt||b.startedAt||0)-(a.createdAt||a.startedAt||0)).slice(0,6);
+  $('#page-today').innerHTML=`<div class="grid grid-3">
+    <button class="card kpi-link" onclick="goPage('routine')"><div class="kpi">${done}/${rs.length}</div><div class="kpi-label">今日 Routine →</div></button>
+    <button class="card kpi-link" onclick="goPage('projects')"><div class="kpi">${activeP.length}</div><div class="kpi-label">长期任务 / Projects →</div></button>
+    <button class="card kpi-link" onclick="goPage('kanban')"><div class="kpi">${activeK.length}</div><div class="kpi-label">Kanban 未完成 →</div></button>
+  </div>
+  <div class="grid grid-2" style="margin-top:18px"><div class="card"><div class="section-title"><h2>今日 Routine</h2><button class="small-btn" onclick="goPage('routine')">历史</button></div>${rs.map(r=>routineItem(r,d)).join('')}</div>
+  <div class="card"><div class="section-title"><h2>长期任务</h2><button class="small-btn" onclick="goPage('projects')">全部</button></div>${recentProjects.map(projectSummary).join('')||'<div class="empty">还没有长期任务</div>'}</div></div>
+  <div class="card" style="margin-top:18px"><div class="section-title"><h2>📊 Kanban</h2><button class="small-btn" onclick="goPage('kanban')">打开看板</button></div><div class="today-kanban-grid"><div>${activeK.slice(0,4).map(t=>cardHtml(t,columnForCard(t))).join('')||'<div class="empty">没有未完成卡片</div>'}</div><div>${calendarModule(todayCalMonth,kanbanCalendarItems(),'todayCalendarShift',true)}</div></div></div>
+  <div style="margin-top:18px">${tagSearchModule()}</div>`;
+}
+/* ======================= END V6 OVERRIDES ======================= */

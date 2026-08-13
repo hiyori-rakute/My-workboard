@@ -1,15 +1,15 @@
-# My Workboard V10.11
+# My Workboard V10.8
 
-基于 V10.8 稳定版重做重复规则，避免 V10.10 的 Today / Routine 空白问题。
+本版只针对图片重复插入做根修复：
 
-Routine / Kanban 共通：
-- 每周指定星期使用 checkbox，可同时选择周二 + 周五。
-- 每月指定日期。
-- 每月最后一天。
-- 每3个月，可设起算日期。
-- 每年指定月份，可同时选择 4月 + 8月等。
-- 同一任务可配置多个条件。
-- OR：任意条件满足就执行，例如 每周五 OR 每月最后一天。
-- AND：全部条件同时满足才执行。
+- 找到 V10.7 仍然重复的真实原因：
+  app.js 中 V10.6 的 document paste listener 仍然存在，并且比 V10.7 listener 更早执行。
+- V10.8 直接从代码中删除 V10.6 旧 listener，不再靠后续 listener 阻止它。
+- 同时禁用最早期 wireImageDrop() 的 ed.onpaste 绑定。
+- 最终只保留一条图片粘贴路径。
+- Kanban / Memo / Project / SOP / Templates 均共用同一套。
+- Ctrl+V 一张截图应只插入一张。
+- Memo 不会重新 render，也不会清空未保存内容。
+- 拖拽图片也统一走单一插入逻辑。
 
-V10.8 已稳定的 Today、Routine 布局、日历、图片、富文本不做结构性修改。
+缓存版本：10.8.0

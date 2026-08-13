@@ -1563,3 +1563,206 @@ function renderToday(){
 /* ---------- init sidebar after app startup ---------- */
 window.addEventListener('load',()=>setTimeout(buildSidebarV9,50));
 /* ======================= END V9 OVERRIDES ======================= */
+
+
+/* ======================= V10 OVERRIDES ======================= */
+let tagSearchTextV10='';
+
+function routineDefaultIcon(name=''){
+  const n=name.toLowerCase();
+  if(n.includes('mail'))return '✉';
+  if(n.includes('jp1'))return '★';
+  if(n.includes('idmc'))return '♥';
+  return '●';
+}
+function migrateV10(){
+  (state.routines||[]).forEach(r=>{
+    r.icon??=routineDefaultIcon(r.name);
+  });
+  (state.routineTemplates||[]).forEach(t=>{
+    if(t.snapshot)t.snapshot.icon??=routineDefaultIcon(t.snapshot.name||t.name);
+  });
+}
+async function loadState(){
+  await openDB();
+  state=await dbGet('state');
+  if(!state)state=structuredClone(DEFAULT);
+  migrate();migrateV5();migrateV6();migrateV7();migrateV9();migrateV10();
+  ensureRecurringKanban();
+  await saveState();
+}
+
+/* ---------- robust rich-task event delegation ---------- */
+/* contenteditable can swallow button clicks in some browsers. Capture them globally. */
+document.addEventListener('click',e=>{
+  const del=e.target.closest?.('.inline-delete');
+  if(del){
+    e.preventDefault();e.stopPropagation();
+    const wrap=del.closest('.inline-task-wrap');
+    if(wrap && confirm('删除这个子任务？如果它还有下级子任务，下级也会一起删除。'))wrap.remove();
+    return;
+  }
+  const child=e.target.closest?.('.inline-child');
+  if(child){
+    e.preventDefault();e.stopPropagation();
+    inlineTaskChild(child);return;
+  }
+  const up=e.target.closest?.('.inline-up');
+  if(up){e.preventDefault();e.stopPropagation();moveInlineTask(up,-1);return;}
+  const down=e.target.closest?.('.inline-down');
+  if(down){e.preventDefault();e.stopPropagation();moveInlineTask(down,1);return;}
+},true);
+
+/* make old nodes get reliable button classes */
+function upgradeRichEditorTasks(root){
+  if(!root)return;
+  root.querySelectorAll('.inline-task').forEach(task=>{
+    task.setAttribute('contenteditable','false');
+    const ensureBtn=(cls,text,title)=>{
+      if(task.querySelector('.'+cls))return;
+      const b=document.createElement('button');b.type='button';b.className=`${cls} task-icon`;b.title=title;b.textContent=text;
+      task.insertBefore(b,task.querySelector('.inline-task-meta')||null);
+    };
+    ensureBtn('inline-up','↑','上移');
+    ensureBtn('inline-down','↓','下移');
+    ensureBtn('inline-child','↳＋','添加下级子任务');
+    ensureBtn('inline-delete','✕','删除这个子任务');
+  });
+}
+
+/* ---------- Routine icon + compact status buttons ---------- */
+function routineStatusButtons(r,d){
+  const st=getRLog(d,r.id)?.status||'';
+  return `<div class="routine-icon-status">
+    <button class="status-icon-btn ${st==='done'?'active done':''}" title="完成" onclick="setRoutineStatus('${d}','${r.id}','done')">✓</button>
+    <button class="status-icon-btn ${st==='leave'?'active leave':''}" title="休假" onclick="setRoutineStatus('${d}','${r.id}','leave')">🏖</button>
+    <button class="status-icon-btn ${st==='na'?'active na':''}" title="N/A" onclick="setRoutineStatus('${d}','${r.id}','na')">−</button>
+    <button class="status-icon-btn ${st==='miss'?'active miss':''}" title="未完成" onclick="setRoutineStatus('${d}','${r.id}','miss')">✕</button>
+  </div>`;
+}
+function routineItem(r,d){
+  const log=getRLog(d,r.id);
+  return `<div class="item routine-item-v10"><div class="item-row"><div class="routine-title-wrap"><span class="routine-icon-preview">${esc(r.icon||'●')}</span><div><div class="item-title">${esc(r.name)}</div><div class="item-meta">${log?.completedAt?'完成 '+fmtTime(log.completedAt):'主任务未完成'}</div></div></div>${routineStatusButtons(r,d)}</div>
+    ${(r.subtasks||[]).map(s=>{const sl=log?.subtasks?.[s.id];return `<label class="checkbox-line subtask"><input type="checkbox" ${sl?.done?'checked':''} onchange="toggleRoutineSub('${d}','${r.id}','${s.id}',this.checked)"><span>${esc(s.title)}</span><span class="item-meta">${sl?.completedAt?fmtTime(sl.completedAt):''}</span></label>`}).join('')}
+  </div>`;
+}
+
+/* ---------- Routine editor gets icon ---------- */
+function openRoutineModal(id){
+  const r=state.routines.find(x=>x.id===id)||{name:'',repeat:'weekdays',weekdays:[1,2,3,4,5],subtasks:[],tags:[],icon:'●'};
+  modal(`<h2>${id?'编辑':'新建'} Routine</h2>
+    <div class="form-row"><div class="form-field"><label>名称</label><input id="rName" value="${esc(r.name)}"></div><div class="form-field"><label>图标</label><input id="rIcon" value="${esc(r.icon||'●')}" maxlength="4" placeholder="例如 ✉ ★ ♥"></div></div>
+    <div class="form-field"><label>标签</label><input id="rTags" value="${esc((r.tags||[]).join(', '))}"></div>
+    <div class="form-field"><label>重复</label><select id="rRepeat"><option value="daily" ${r.repeat==='daily'?'selected':''}>每天</option><option value="weekdays" ${r.repeat==='weekdays'?'selected':''}>工作日</option><option value="custom" ${r.repeat==='custom'?'selected':''}>指定星期</option></select></div>
+    <div>${['日','一','二','三','四','五','六'].map((n,i)=>`<label class="checkbox-line"><input type="checkbox" class="rWeek" value="${i}" ${(r.weekdays||[]).includes(i)?'checked':''}>周${n}</label>`).join('')}</div>
+    <h3>子任务</h3><div id="rSubs">${(r.subtasks||[]).map(routineSubEditRow).join('')}</div>
+    <button class="small-btn" onclick="$('#rSubs').insertAdjacentHTML('beforeend',routineSubEditRow({id:uid(),title:''}))">＋子任务</button>
+    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRoutineV10('${id||''}')">保存</button></div>`);
+}
+async function saveRoutineV10(id){
+  const x={id:id||uid(),name:$('#rName').value.trim(),icon:($('#rIcon').value.trim()||'●'),tags:splitTags($('#rTags').value),repeat:$('#rRepeat').value,weekdays:$$('.rWeek:checked').map(x=>+x.value),subtasks:$$('.rsub').map(e=>({id:e.dataset.id,title:e.querySelector('.rsub-title').value.trim()})).filter(x=>x.title)};
+  if(id)state.routines[state.routines.findIndex(r=>r.id===id)]=x;else state.routines.push(x);
+  await saveState();closeModal();renderAll();
+}
+
+/* preserve icon in routine templates */
+function cloneRoutineSnapshot(r){
+  return{name:r.name,icon:r.icon||'●',tags:[...(r.tags||[])],repeat:r.repeat,weekdays:[...(r.weekdays||[])],subtasks:(r.subtasks||[]).map(s=>({id:uid(),title:s.title}))}
+}
+
+/* ---------- Routine calendar with per-task icons ---------- */
+function routineDayIcons(dateStr){
+  return state.routines.filter(r=>isRoutineDue(r,dateStr)).map(r=>{
+    const st=getRLog(dateStr,r.id)?.status;
+    const complete=st==='done'||st==='leave'||st==='na';
+    return {icon:r.icon||'●',complete,name:r.name,status:st||''};
+  });
+}
+function routineCalendar(monthKey,onShiftName,showKanban=false){
+  const [y,m]=monthKey.split('-').map(Number),first=new Date(y,m-1,1),last=new Date(y,m,0),start=first.getDay();
+  const kitems=showKanban?kanbanCalendarItems():[];
+  let cells=['日','一','二','三','四','五','六'].map(x=>`<div class="cal-week">${x}</div>`);
+  for(let i=0;i<start;i++)cells.push('<div class="cal-day blank"></div>');
+  for(let day=1;day<=last.getDate();day++){
+    const ds=`${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const icons=routineDayIcons(ds);
+    const iconHtml=icons.map(x=>`<span class="routine-task-icon ${x.complete?'complete':'pending'}" title="${esc(x.name)}">${esc(x.icon)}</span>`).join('');
+    const hits=showKanban?kitems.filter(x=>x.date&&x.date.toISOString().slice(0,10)===ds).sort((a,b)=>Number(a.done)-Number(b.done)):[];
+    const events=hits.map(h=>`<button class="cal-event ${h.done?'done':''}" title="${esc(h.title)}" onclick="openKanbanCard('${h.id}')">${h.done?'✓ ':''}${esc(h.title)}</button>`).join('');
+    cells.push(`<div class="cal-day ${ds===todayISO()?'today':''}"><div class="cal-num-row"><span class="cal-num">${day}</span><span class="routine-icons-row">${iconHtml}</span></div><div class="cal-events-scroll">${events}</div></div>`);
+  }
+  return `<div class="calendar-card"><div class="cal-head"><button class="micro-btn" onclick="${onShiftName}(-1)">‹</button><b>${y}年${m}月</b><button class="micro-btn" onclick="${onShiftName}(1)">›</button></div><div class="calendar-v5">${cells.join('')}</div>
+    <div class="calendar-legend"><span class="legend-routine-example pending">✉</span> 未完成 Routine <span class="legend-routine-example complete">✉</span> 已完成 / 休假 / N/A</div>
+  </div>`;
+}
+function combinedCalendar(monthKey,onShiftName){return routineCalendar(monthKey,onShiftName,true)}
+
+/* ---------- Routine page: calendar on right spanning both sections ---------- */
+function renderRoutine(){
+  const due=state.routines.filter(r=>isRoutineDue(r,routineViewDate));
+  $('#page-routine').innerHTML=`<div class="routine-page-layout">
+    <div class="routine-left-stack">
+      <div class="card"><div class="section-title"><h2>Daily Routine</h2><div><button class="ghost-btn" onclick="goPage('templates')">🧩</button> <button class="primary-btn" onclick="openRoutineModal()">＋ 新建 Routine</button></div></div>
+        <div class="form-field routine-date-field"><label>查看日期</label><input type="date" value="${routineViewDate}" onchange="routineViewDate=this.value;renderRoutine()"></div>
+        <div class="list" style="margin-top:14px">${due.map(r=>routineItem(r,routineViewDate)).join('')||'<div class="empty">这一天没有 Routine</div>'}</div>
+      </div>
+      <div class="card"><div class="section-title"><h2>Routine 管理</h2></div>${state.routines.map(r=>`<div class="item"><div class="item-row"><div class="routine-title-wrap"><span class="routine-icon-preview">${esc(r.icon||'●')}</span><div><b>${esc(r.name)}</b><div class="tags">${tagHtml(r.tags)}</div><div class="item-meta">${repeatText(r)} · ${(r.subtasks||[]).length} 个子任务</div></div></div><div><button class="small-btn" onclick="saveRoutineAsTemplate('${r.id}')">☆</button> <button class="small-btn" onclick="openRoutineModal('${r.id}')">✎</button> <button class="danger-btn" onclick="deleteRoutine('${r.id}')">✕</button></div></div></div>`).join('')}</div>
+    </div>
+    <div class="card routine-calendar-side"><div class="section-title"><h2>📅 Routine 日历</h2></div>${routineCalendar(todayCalMonth,'todayCalendarShift',false)}</div>
+  </div>`;
+}
+
+/* ---------- tag search without rerender ---------- */
+function unifiedTagResults(q){
+  q=(q||'').trim().toLowerCase();if(!q)return[];
+  const out=[];
+  state.routines.forEach(x=>{if((x.tags||[]).some(t=>t.toLowerCase().includes(q)))out.push({type:'Routine',title:x.name,page:'routine'})});
+  state.projects.forEach(x=>{if((x.tags||[]).some(t=>t.toLowerCase().includes(q)))out.push({type:'Project',title:x.title,page:'projects',id:x.id})});
+  state.kanban.filter(x=>!x.archived).forEach(x=>{if((x.tags||[]).some(t=>t.toLowerCase().includes(q)))out.push({type:'Kanban',title:x.title,page:'kanban',id:x.id})});
+  state.memos.forEach(x=>{if((x.tags||[]).some(t=>t.toLowerCase().includes(q)))out.push({type:'Memo',title:x.title,page:'memo',id:x.id})});
+  return out;
+}
+function tagSearchModuleV10(){
+  return `<div class="card tag-search-card"><div class="section-title"><h2>🏷 标签检索</h2></div><input id="tagSearchInputV10" placeholder="输入标签，例如 Memory / AMO / 月次" value="${esc(tagSearchTextV10)}" oninput="updateTagSearchV10(this.value)"><div id="tagSearchResultsV10" class="list" style="margin-top:12px"></div></div>`;
+}
+function updateTagSearchV10(v){
+  tagSearchTextV10=v||'';
+  const root=document.getElementById('tagSearchResultsV10');if(!root)return;
+  const rows=unifiedTagResults(tagSearchTextV10);
+  root.innerHTML=rows.map(r=>`<button class="item tag-result-item" onclick="openTagResultV10('${r.page}','${r.id||''}')"><span class="pill">${r.type}</span> ${esc(r.title)}</button>`).join('')||(tagSearchTextV10?'<div class="empty small-empty">没有匹配内容</div>':'');
+}
+function openTagResultV10(page,id){
+  goPage(page);
+  setTimeout(()=>{
+    if(page==='kanban'&&id)openKanbanCard(id);
+    if(page==='projects'&&id)openProject(id);
+    if(page==='memo'&&id){activeMemoId=id;renderMemo();}
+  },30);
+}
+
+/* ---------- Today layout ---------- */
+function renderToday(){
+  ensureRecurringKanban();
+  const d=todayISO(),rs=state.routines.filter(r=>isRoutineDue(r,d)),done=rs.filter(r=>getRLog(d,r.id)?.status==='done').length;
+  const activeP=state.projects.filter(p=>p.status!=='done'&&!p.completedAt);
+  const activeK=state.kanban.filter(x=>!x.completedAt&&!x.archived&&String(columnForCard(x)?.name||x.status).toUpperCase()!=='DONE');
+  const recentProjects=[...state.projects].sort((a,b)=>(b.createdAt||b.startedAt||0)-(a.createdAt||a.startedAt||0)).slice(0,5);
+  $('#page-today').innerHTML=`<div class="grid grid-3">
+    <button class="card kpi-link" onclick="goPage('routine')"><div class="kpi">${done}/${rs.length}</div><div class="kpi-label">今日 Routine →</div></button>
+    <button class="card kpi-link" onclick="goPage('projects')"><div class="kpi">${activeP.length}</div><div class="kpi-label">长期任务 / Projects →</div></button>
+    <button class="card kpi-link" onclick="goPage('kanban')"><div class="kpi">${activeK.length}</div><div class="kpi-label">Kanban 未完成 →</div></button>
+  </div>
+  <div class="grid today-top-row" style="margin-top:18px">
+    <div class="card"><div class="section-title"><h2>🗂 长期任务</h2><button class="small-btn" onclick="goPage('projects')">全部</button></div>${recentProjects.map(projectSummary).join('')||'<div class="empty">还没有长期任务</div>'}</div>
+    ${tagSearchModuleV10()}
+  </div>
+  <div class="today-work-calendar-grid" style="margin-top:18px">
+    <div class="today-left-stack">
+      <div class="card"><div class="section-title"><h2>今日 Routine</h2><button class="small-btn" onclick="goPage('routine')">历史</button></div>${rs.map(r=>routineItem(r,d)).join('')}</div>
+      <div class="card"><div class="section-title"><h2>📊 Kanban</h2><button class="small-btn" onclick="goPage('kanban')">打开看板</button></div><div class="today-column-groups">${state.kanbanColumns.map(todayColumnGroup).join('')}</div></div>
+    </div>
+    <div class="card today-calendar-side"><div class="section-title"><h2>📅 Routine + Kanban 日历</h2></div>${combinedCalendar(todayCalMonth,'todayCalendarShift')}</div>
+  </div>`;
+  setTimeout(()=>updateTagSearchV10(tagSearchTextV10),0);
+}
+/* ======================= END V10 OVERRIDES ======================= */

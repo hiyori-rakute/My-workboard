@@ -207,3 +207,32 @@ input,select,textarea{width:100%;border:1px solid var(--line);border-radius:11px
 .legend-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px}.legend-dot.green{background:#28a66a}.legend-dot.gray{background:#a6abb4}
 .project-filter-item{transition:opacity .12s ease}
 @media(max-width:900px){.inline-task{grid-template-columns:auto auto 1fr auto auto!important}.inline-task-meta{grid-column:1/-1}}
+
+/* ======================= V10 ======================= */
+.routine-icon-status{display:flex;gap:5px;flex-wrap:nowrap}
+.status-icon-btn{width:31px;height:29px;border:1px solid var(--line);background:#fff;border-radius:8px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:13px}
+.status-icon-btn.active.done{background:#e8f7ef;color:#178754}
+.status-icon-btn.active.leave{background:#fff7dc;color:#936d00}
+.status-icon-btn.active.na{background:#eef0f4;color:#555}
+.status-icon-btn.active.miss{background:#fff0f0;color:#d9534f}
+.routine-title-wrap{display:flex;align-items:center;gap:9px}.routine-icon-preview{font-size:20px;min-width:24px;text-align:center}
+.routine-task-icon{display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;margin-left:2px}
+.routine-task-icon.pending{color:#20a464}.routine-task-icon.complete{color:#a2a7b0;filter:grayscale(1)}
+.routine-icons-row{display:flex;align-items:center;gap:2px;min-width:0;overflow:hidden}
+.legend-routine-example{font-size:14px}.legend-routine-example.pending{color:#20a464}.legend-routine-example.complete{color:#a2a7b0}
+.today-top-row{grid-template-columns:minmax(0,1.35fr) minmax(330px,.65fr)}
+.today-work-calendar-grid{display:grid;grid-template-columns:minmax(360px,.8fr) minmax(640px,1.2fr);gap:18px;align-items:stretch}
+.today-left-stack{display:flex;flex-direction:column;gap:18px}
+.today-calendar-side{min-width:0}
+.today-calendar-side .cal-day{min-height:120px}
+.today-calendar-side .calendar-v5{gap:4px}
+.tag-search-card{min-width:0}.tag-result-item{text-align:left;width:100%}
+.routine-page-layout{display:grid;grid-template-columns:minmax(460px,.9fr) minmax(650px,1.1fr);gap:18px;align-items:stretch}
+.routine-left-stack{display:flex;flex-direction:column;gap:18px}
+.routine-calendar-side{min-width:0}
+.routine-calendar-side .cal-day{min-height:128px}
+.routine-date-field{max-width:100%}
+.routine-item-v10 .item-row{align-items:center}
+@media(max-width:1150px){
+  .today-top-row,.today-work-calendar-grid,.routine-page-layout{grid-template-columns:1fr}
+}

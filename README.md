@@ -1,26 +1,16 @@
-# My Workboard V7
+# My Workboard V8
 
-V7 修复和新增：
+V8 专门修复富文本与多级子任务：
 
-- 修复 V6 Memo 页面空白 bug。
-- Kanban 子任务增加删除按钮；删除父任务时会一起删除其下级。
-- Kanban 列设置增加删除列：
-  - 空列直接删除；
-  - 有卡片时先选择把卡片移动到哪一列。
-- Kanban 每张卡片可以单独设置背景颜色，不受整列默认颜色限制。
-- DONE 卡片仍强制灰化。
-- Routine 管理增加删除按钮。
-- Project 本身继续保留删除；Project 分类也可以删除，分类内项目自动转到“未分类”。
-- SOP 模板卡增加删除按钮。
-- Memo 修复后支持正常新建/编辑/删除，Checkbox 也有删除按钮。
-- Today 的 Kanban 改为按列分组：
-  - 定期作业
-  - TODO
-  - DOING
-  - WAITING
-  - ...
-  点击组名展开/收起对应卡片。
-- 继续兼容 V1~V6 IndexedDB 数据。
+- Memo 富文本里的 ↳＋ 可以正常添加下级子任务。
+- Kanban 已存在的旧次级子任务打开后会自动补上 ✕ 删除按钮。
+- 所有层级子任务都可删除；删除父任务时下级一起删除。
+- Template Library 的 Kanban / Project / Memo 富文本 ☑ 按钮可正常插入子任务。
+- 富文本工具栏统一改为紧凑图标：
+  B / U / 红色 A / 🖍 / • / → / ← / 🔗 / ☑ / 🖼
+- 字体颜色不再显示成小圆点，改为红色 A。
+- Kanban / Project / SOP / Memo / Templates 中凡是使用富文本的地方共用同一套工具栏。
+- 兼容 V1~V7 IndexedDB 数据。
 
-更新前请先导出 JSON 备份，然后覆盖 GitHub 根目录 5 个文件并 Commit。
-部署完成后 Ctrl+F5，左上角应显示 Personal Work OS · V7。
+更新前请导出备份，覆盖 GitHub 的 index.html / style.css / db.js / app.js / README.md。
+部署后 Ctrl+F5，左上角应显示 Personal Work OS · V8。

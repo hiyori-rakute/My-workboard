@@ -1111,3 +1111,205 @@ function renderToday(){
   </div><div style="margin-top:18px">${tagSearchModule()}</div>`;
 }
 /* ======================= END V7 OVERRIDES ======================= */
+
+
+/* ==================== V8 RICH EDITOR FIXES ==================== */
+
+/* All rich editors share the same compact icon-only toolbar. */
+function richToolbar(id){
+  return `<div class="rich-toolbar rich-toolbar-v8">
+    <button type="button" class="rt-btn" title="粗体" onclick="richCmd('${id}','bold')"><b>B</b></button>
+    <button type="button" class="rt-btn" title="下划线" onclick="richCmd('${id}','underline')"><u>U</u></button>
+    <button type="button" class="rt-btn rt-red-a" title="字体颜色" onclick="openRichColorPicker('${id}')">A</button>
+    <button type="button" class="rt-btn" title="高亮" onclick="richHighlight('${id}')">🖍</button>
+    <button type="button" class="rt-btn" title="项目符号" onclick="richCmd('${id}','insertUnorderedList')">•</button>
+    <button type="button" class="rt-btn" title="增加缩进" onclick="richCmd('${id}','indent')">→</button>
+    <button type="button" class="rt-btn" title="减少缩进" onclick="richCmd('${id}','outdent')">←</button>
+    <button type="button" class="rt-btn" title="链接" onclick="richLink('${id}')">🔗</button>
+    <button type="button" class="rt-btn" title="插入子任务" onclick="insertInlineCheckbox('${id}')">☑</button>
+    <button type="button" class="rt-btn" title="插入图片" onclick="pickInlineImage('${id}')">🖼</button>
+  </div>`;
+}
+
+function openRichColorPicker(id){
+  let picker=document.getElementById('__richColorPickerV8');
+  if(!picker){
+    picker=document.createElement('input');
+    picker.id='__richColorPickerV8';
+    picker.type='color';
+    picker.value='#d32f2f';
+    picker.style.position='fixed';
+    picker.style.left='-100px';
+    picker.style.top='-100px';
+    document.body.appendChild(picker);
+  }
+  picker.oninput=()=>richColor(id,picker.value);
+  picker.click();
+}
+
+function richEditor(id,html,placeholder='输入内容…'){
+  return `${richToolbar(id)}<div id="${id}" class="rich-editor rich-editor-v8" contenteditable="true" data-placeholder="${esc(placeholder)}">${html||''}</div>`;
+}
+
+/* New task markup: every level always has start / due / child / delete controls. */
+function inlineTaskMarkup(t={}){
+  const id=t.id||uid();
+  const title=esc(t.text||t.title||'新子任务');
+  const due=esc(t.dueAt||'');
+  const st=t.startedAt||'';
+  const done=t.completedAt||'';
+  const checked=t.done||t.completedAt;
+  const children=t.children||[];
+  return `<div class="inline-task-wrap" data-wrapper-id="${id}">
+    <span class="inline-task" data-task-id="${id}" data-started="${st||''}" data-completed="${done||''}" data-due="${due}" contenteditable="false">
+      <button type="button" class="inline-start task-icon" title="Start" onclick="inlineTaskStart(this)">▶</button>
+      <input type="checkbox" ${checked?'checked':''} onchange="inlineTaskDone(this)">
+      <span class="inline-task-text" contenteditable="true">${title}</span>
+      <button type="button" class="inline-due task-icon" title="预计完成时间" onclick="inlineTaskDue(this)">⏰</button>
+      <button type="button" class="inline-child task-icon" title="添加下级子任务" onclick="inlineTaskChild(this)">↳＋</button>
+      <button type="button" class="inline-delete task-icon danger-icon" title="删除这个子任务" onclick="removeInlineTask(this)">✕</button>
+      <span class="inline-task-meta">${st?fmtTime(Number(st)):'未开始'}${due?' · 预计 '+due.replace('T',' '):''}${done?' · 完成 '+fmtTime(Number(done)):''}</span>
+    </span>
+    <div class="inline-children">${children.map(inlineTaskMarkup).join('')}</div>
+  </div>`;
+}
+
+/* Works even when there is no valid selection inside the editor (the old template bug). */
+function insertInlineCheckbox(id){
+  const ed=document.getElementById(id);
+  if(!ed){ toast('当前编辑框还没有准备好'); return; }
+
+  const html=inlineTaskMarkup({id:uid(),text:'新子任务',children:[]});
+  ed.focus();
+
+  const sel=window.getSelection();
+  if(sel && sel.rangeCount && ed.contains(sel.anchorNode)){
+    const range=sel.getRangeAt(0);
+    range.deleteContents();
+    const holder=document.createElement('div');
+    holder.innerHTML=html;
+    const node=holder.firstElementChild;
+    range.insertNode(node);
+    range.setStartAfter(node);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }else{
+    ed.insertAdjacentHTML('beforeend',html);
+  }
+  upgradeRichEditorTasks(ed);
+}
+
+/* Add a child task robustly. */
+function inlineTaskChild(btn){
+  const wrap=btn.closest('.inline-task-wrap');
+  if(!wrap)return;
+  let children=null;
+  for(const child of wrap.children){
+    if(child.classList && child.classList.contains('inline-children')){children=child;break;}
+  }
+  if(!children){
+    children=document.createElement('div');
+    children.className='inline-children';
+    wrap.appendChild(children);
+  }
+  const holder=document.createElement('div');
+  holder.innerHTML=inlineTaskMarkup({id:uid(),text:'新子任务',children:[]});
+  children.appendChild(holder.firstElementChild);
+}
+
+/* Delete works at any depth. */
+function removeInlineTask(btn){
+  const wrap=btn.closest('.inline-task-wrap');
+  if(!wrap)return;
+  if(confirm('删除这个子任务？如果它还有下级子任务，下级也会一起删除。')){
+    wrap.remove();
+  }
+}
+
+/* Upgrade V5/V6/V7 task nodes already stored in IndexedDB.
+   This is why old nested tasks also get a delete button. */
+function upgradeRichEditorTasks(root){
+  if(!root)return;
+  root.querySelectorAll('.inline-task').forEach(task=>{
+    task.setAttribute('contenteditable','false');
+
+    if(!task.querySelector('.inline-child')){
+      const child=document.createElement('button');
+      child.type='button';
+      child.className='inline-child task-icon';
+      child.title='添加下级子任务';
+      child.textContent='↳＋';
+      child.onclick=function(){inlineTaskChild(this)};
+      const meta=task.querySelector('.inline-task-meta');
+      task.insertBefore(child,meta||null);
+    }
+
+    if(!task.querySelector('.inline-delete')){
+      const del=document.createElement('button');
+      del.type='button';
+      del.className='inline-delete task-icon danger-icon';
+      del.title='删除这个子任务';
+      del.textContent='✕';
+      del.onclick=function(){removeInlineTask(this)};
+      const meta=task.querySelector('.inline-task-meta');
+      task.insertBefore(del,meta||null);
+    }
+  });
+}
+
+/* Hydrate all editors after every modal/drawer/page render. */
+function hydrateAllRichEditors(){
+  document.querySelectorAll('.rich-editor').forEach(upgradeRichEditorTasks);
+}
+const __v8OldModal=modal;
+modal=function(html){
+  __v8OldModal(html);
+  setTimeout(hydrateAllRichEditors,0);
+};
+const __v8OldDrawer=drawer;
+drawer=function(html){
+  __v8OldDrawer(html);
+  setTimeout(hydrateAllRichEditors,0);
+};
+const __v8OldRenderAll=renderAll;
+renderAll=function(){
+  __v8OldRenderAll();
+  setTimeout(hydrateAllRichEditors,0);
+};
+
+/* Memo page also needs hydration after its direct render. */
+const __v8OldRenderMemo=renderMemo;
+renderMemo=function(){
+  __v8OldRenderMemo();
+  setTimeout(hydrateAllRichEditors,0);
+};
+
+/* Template page is direct-rendered, too. */
+const __v8OldRenderTemplates=renderTemplates;
+renderTemplates=function(){
+  __v8OldRenderTemplates();
+  setTimeout(hydrateAllRichEditors,0);
+};
+
+/* Make template save functions collect the nested tasks from the editor. */
+async function saveKanbanTemplateEdit(id){
+  const t=state.kanbanTemplates.find(x=>x.id===id);if(!t)return;
+  t.name=$('#ktName').value.trim();
+  t.title=$('#ktTitle').value.trim();
+  t.tags=splitTags($('#ktTags').value);
+  t.html=$('#ktRich').innerHTML;
+  t.checks=clearTaskTimes(collectInlineTasks('ktRich'));
+  await saveState();closeModal();renderTemplates();
+}
+async function saveProjectTemplateEdit(id){
+  const t=state.projectTemplates.find(x=>x.id===id);if(!t)return;
+  t.name=$('#ptName').value.trim();
+  t.snapshot.title=$('#ptTitle').value.trim();
+  t.snapshot.tags=splitTags($('#ptTags').value);
+  t.snapshot.html=$('#ptRich').innerHTML;
+  t.snapshot.subtasks=clearTaskTimes(collectInlineTasks('ptRich'));
+  await saveState();closeModal();renderTemplates();
+}
+
+/* ================== END V8 RICH EDITOR FIXES ================== */

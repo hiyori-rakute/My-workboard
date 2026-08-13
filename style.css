@@ -124,3 +124,66 @@ input,select,textarea{width:100%;border:1px solid var(--line);border-radius:11px
 .today-col-cards{padding:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px}
 .small-empty{padding:12px}
 @media(max-width:900px){.memo-layout{grid-template-columns:1fr}.memo-check-row{grid-template-columns:20px 1fr}.memo-check-row .c-due,.memo-check-row .micro-delete{grid-column:2}}
+
+/* ==================== V8 rich toolbar ==================== */
+.rich-toolbar-v8{
+  display:flex;
+  align-items:center;
+  gap:4px;
+  flex-wrap:nowrap;
+  overflow-x:auto;
+  padding:6px 7px;
+}
+.rich-toolbar-v8 .rt-btn{
+  width:32px!important;
+  min-width:32px;
+  height:30px;
+  padding:0!important;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  font-size:14px;
+  line-height:1;
+  border:1px solid var(--line);
+  background:#fff;
+  border-radius:7px;
+}
+.rich-toolbar-v8 .rt-red-a{
+  color:#d32f2f;
+  font-weight:800;
+  text-decoration:underline;
+  text-decoration-color:#d32f2f;
+  text-underline-offset:3px;
+}
+.inline-task{
+  grid-template-columns:auto auto minmax(90px,1fr) auto auto auto!important;
+}
+.inline-task .task-icon{
+  width:27px;
+  min-width:27px;
+  height:25px;
+  border:1px solid var(--line);
+  background:#fff;
+  border-radius:7px;
+  padding:0;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  font-size:11px;
+}
+.inline-task .danger-icon{
+  color:#d9534f;
+  background:#fff3f3;
+  border-color:#ffd5d5;
+}
+.inline-children{
+  margin-left:28px;
+  border-left:2px solid #e3e6ee;
+  padding-left:8px;
+}
+.rich-editor-v8{
+  min-height:145px;
+}
+@media(max-width:900px){
+  .rich-toolbar-v8{flex-wrap:wrap}
+}

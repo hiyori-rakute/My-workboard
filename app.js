@@ -1,380 +1,253 @@
 
-const $ = s=>document.querySelector(s);
-const $$ = s=>[...document.querySelectorAll(s)];
-const uid = ()=>crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)+Math.random().toString(36).slice(2);
-const todayISO = ()=>new Date().toISOString().slice(0,10);
-const fmtDate = d=>new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'long',day:'numeric',weekday:'short'}).format(new Date(d+'T12:00:00'));
-const fmtTime = ts=>ts ? new Intl.DateTimeFormat('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(ts)) : '-';
-const esc = s=>(s??'').toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
-const msToText = ms=>{
-  if(!ms || ms<0) return '-';
-  const sec=Math.floor(ms/1000), h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=sec%60;
-  return [h?`${h}h`:null,m?`${m}m`:null,`${s}s`].filter(Boolean).join(' ');
-};
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const uid=()=>crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2);
+const todayISO=()=>new Date().toISOString().slice(0,10);
+const esc=s=>(s??'').toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+const fmtDate=d=>new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'long',day:'numeric',weekday:'short'}).format(new Date(d+'T12:00:00'));
+const fmtTime=ts=>ts?new Intl.DateTimeFormat('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(ts)):'-';
+const msToText=ms=>{if(!ms||ms<0)return'-';const s=Math.floor(ms/1000),h=Math.floor(s/3600),m=Math.floor((s%3600)/60),ss=s%60;return[h?`${h}h`:null,m?`${m}m`:null,`${ss}s`].filter(Boolean).join(' ')};
+const tagHtml=tags=>(tags||[]).map(t=>`<span class="tag">${esc(t)}</span>`).join('');
+const splitTags=s=>s.split(/[,，\s]+/).map(x=>x.trim()).filter(Boolean);
 
-const DEFAULT_DATA = {
-  routines:[
-    {id:uid(),name:'Mail Check',repeat:'weekdays',weekdays:[1,2,3,4,5],createdAt:Date.now()},
-    {id:uid(),name:'JP1 Check',repeat:'weekdays',weekdays:[1,2,3,4,5],createdAt:Date.now()},
-    {id:uid(),name:'IDMC Check',repeat:'weekdays',weekdays:[1,2,3,4,5],createdAt:Date.now()}
-  ],
-  routineLogs:{},
-  sopTemplates:[
-    {
-      id:uid(),name:'Database Refresh',category:'Database',description:'月次 Database Refresh 作业模板',
-      links:[],
-      steps:[
-        {id:uid(),title:'事前确认',note:'确认作业窗口、对象环境、相关联系人。'},
-        {id:uid(),title:'DB Backup',note:''},
-        {id:uid(),title:'Stop Application',note:''},
-        {id:uid(),title:'Refresh',note:''},
-        {id:uid(),title:'Start Application',note:''},
-        {id:uid(),title:'事后确认',note:''}
-      ]
-    }
-  ],
-  executions:[],
-  kanban:[
-    {id:uid(),title:'确认 AMO 回复',status:'todo',note:''},
-    {id:uid(),title:'更新手顺书',status:'doing',note:''}
-  ],
-  memos:[
-    {id:uid(),title:'Quick Memo',content:'可以在这里记录临时 Memo、链接和截图。',checks:[],images:[],updatedAt:Date.now()}
-  ]
+const DEFAULT={
+ routines:[
+  {id:uid(),name:'Mail Check',repeat:'weekdays',weekdays:[1,2,3,4,5],subtasks:[{id:uid(),title:'确认 Inbox'},{id:uid(),title:'确认需要跟进的邮件'}]},
+  {id:uid(),name:'JP1 Check',repeat:'weekdays',weekdays:[1,2,3,4,5],subtasks:[]},
+  {id:uid(),name:'IDMC Check',repeat:'weekdays',weekdays:[1,2,3,4,5],subtasks:[]}
+ ],
+ routineLogs:{},
+ kanbanColumns:[{id:'todo',name:'TODO'},{id:'doing',name:'DOING'},{id:'waiting',name:'WAITING'},{id:'done',name:'DONE'}],
+ kanban:[{id:uid(),title:'确认 AMO 回复',status:'todo',html:'',checks:[],images:[],tags:['AMO']},{id:uid(),title:'更新手顺书',status:'doing',html:'',checks:[],images:[],tags:['文档']}],
+ memos:[{id:uid(),title:'Quick Memo',html:'可以在这里记录临时 Memo、链接、截图和 checkbox。',checks:[],images:[],tags:[],updatedAt:Date.now()}],
+ projectCategories:[
+  {id:uid(),name:'Memory 管理'},
+  {id:uid(),name:'客户询问'}
+ ],
+ projects:[],
+ sopTemplates:[{id:uid(),name:'Database Refresh',category:'Database',description:'月次 Database Refresh 作业模板',links:[],steps:[
+  {id:uid(),title:'事前确认',note:'确认作业窗口、对象环境、相关联系人。'},{id:uid(),title:'DB Backup',note:''},{id:uid(),title:'Stop Application',note:''},{id:uid(),title:'Refresh',note:''},{id:uid(),title:'Start Application',note:''},{id:uid(),title:'事后确认',note:''}
+ ]}],
+ executions:[]
 };
-let state;
+let state, routineViewDate=todayISO(), activeMemoId=null;
 
 async function loadState(){
-  await openDB();
-  state = await dbGet('state');
-  if(!state){ state=structuredClone(DEFAULT_DATA); await saveState(); }
-  // migrations / missing keys
-  for(const [k,v] of Object.entries(DEFAULT_DATA)) if(state[k]===undefined) state[k]=structuredClone(v);
+ await openDB(); state=await dbGet('state');
+ if(!state) state=structuredClone(DEFAULT);
+ migrate(); await saveState();
 }
-async function saveState(){ await dbSet('state',state); }
-function toast(msg){
-  const el=document.createElement('div'); el.className='toast'; el.textContent=msg; $('#toastRoot').appendChild(el);
-  setTimeout(()=>el.remove(),2200);
+function migrate(){
+ for(const[k,v]of Object.entries(DEFAULT)) if(state[k]===undefined)state[k]=structuredClone(v);
+ state.routines.forEach(r=>{r.subtasks??=[]});
+ state.kanban.forEach(k=>{k.html??=k.note||'';k.checks??=[];k.images??=[];k.tags??=[]});
+ state.memos.forEach(m=>{m.html??=m.content||'';m.checks??=[];m.images??=[];m.tags??=[]});
+ state.projects??=[]; state.projectCategories??=structuredClone(DEFAULT.projectCategories); state.kanbanColumns??=structuredClone(DEFAULT.kanbanColumns);
 }
-function modal(html){
-  $('#modalRoot').innerHTML=`<div class="modal-backdrop"><div class="modal">${html}</div></div>`;
-}
-function closeModal(){ $('#modalRoot').innerHTML=''; }
+async function saveState(){await dbSet('state',state)}
+function toast(msg){const el=document.createElement('div');el.className='toast';el.textContent=msg;$('#toastRoot').appendChild(el);setTimeout(()=>el.remove(),1800)}
+function modal(html){$('#modalRoot').innerHTML=`<div class="modal-backdrop"><div class="modal">${html}</div></div>`}
+function closeModal(){$('#modalRoot').innerHTML=''}
+function drawer(html){$('#drawerRoot').innerHTML=`<div class="drawer-backdrop"></div><aside class="drawer">${html}</aside>`}
+function closeDrawer(){$('#drawerRoot').innerHTML=''}
 
-function isRoutineDue(r,dateStr){
-  const d=new Date(dateStr+'T12:00:00'), wd=d.getDay();
-  if(r.repeat==='daily') return true;
-  if(r.repeat==='weekdays') return wd>=1&&wd<=5;
-  if(r.repeat==='custom') return (r.weekdays||[]).includes(wd);
-  return true;
+function goPage(n){
+ $$('.page').forEach(x=>x.classList.remove('active'));$(`#page-${n}`).classList.add('active');
+ $$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.page===n));
+ $('#pageTitle').textContent=({today:'Today',routine:'Routine',projects:'Projects',sop:'SOP',history:'Execution History',kanban:'Kanban',memo:'Memo',settings:'Settings'})[n];
+ renderPage(n);
 }
-function getRoutineLog(date,id){ return state.routineLogs?.[date]?.[id] || null; }
-async function setRoutineStatus(date,id,status){
-  state.routineLogs[date] ||= {};
-  if(!status) delete state.routineLogs[date][id];
-  else state.routineLogs[date][id]={status,completedAt:status==='done'?Date.now():null};
-  await saveState(); renderAll();
-}
+function renderPage(n){({today:renderToday,routine:renderRoutine,projects:renderProjects,sop:renderSOP,history:renderHistory,kanban:renderKanban,memo:renderMemo,settings:renderSettings}[n]||(()=>{}))()}
+function renderAll(){ $('#todayText').textContent=fmtDate(todayISO()); renderPage($('.nav-item.active')?.dataset.page||'today') }
 
-function routineItemHtml(r,date){
-  const log=getRoutineLog(date,r.id);
-  const st=log?.status||'';
-  return `<div class="item">
-    <div class="item-row">
-      <div>
-        <div class="item-title">${esc(r.name)}</div>
-        <div class="item-meta">${log?.completedAt ? '完成 '+fmtTime(log.completedAt) : '未记录'}</div>
-      </div>
-      <div class="status-group">
-        <button class="status-btn done ${st==='done'?'active':''}" onclick="setRoutineStatus('${date}','${r.id}','done')">✅ 完成</button>
-        <button class="status-btn leave ${st==='leave'?'active':''}" onclick="setRoutineStatus('${date}','${r.id}','leave')">🏖 休假</button>
-        <button class="status-btn na ${st==='na'?'active':''}" onclick="setRoutineStatus('${date}','${r.id}','na')">➖ 不适用</button>
-        <button class="status-btn miss ${st==='miss'?'active':''}" onclick="setRoutineStatus('${date}','${r.id}','miss')">✕ 未完成</button>
-        <button class="status-btn" onclick="setRoutineStatus('${date}','${r.id}','')">↺</button>
-      </div>
-    </div>
-  </div>`;
+function richToolbar(id){
+ return `<div class="rich-toolbar">
+  <button type="button" onclick="richCmd('${id}','bold')"><b>B</b></button>
+  <button type="button" onclick="richCmd('${id}','underline')"><u>U</u></button>
+  <button type="button" onclick="richCmd('${id}','insertUnorderedList')">• List</button>
+  <button type="button" onclick="richCmd('${id}','indent')">→ 缩进</button>
+  <button type="button" onclick="richCmd('${id}','outdent')">← 回缩</button>
+  <input type="color" title="字体颜色" onchange="richColor('${id}',this.value)"/>
+  <button type="button" onclick="richLink('${id}')">🔗 Link</button>
+ </div>`;
 }
+function richEditor(id,html,placeholder='输入内容…'){return `${richToolbar(id)}<div id="${id}" class="rich-editor" contenteditable="true" data-placeholder="${esc(placeholder)}">${html||''}</div>`}
+function richCmd(id,cmd){document.getElementById(id)?.focus();document.execCommand(cmd,false,null)}
+function richColor(id,c){document.getElementById(id)?.focus();document.execCommand('foreColor',false,c)}
+function richLink(id){const u=prompt('输入链接 URL');if(!u)return;document.getElementById(id)?.focus();document.execCommand('createLink',false,u)}
+function wireImageDrop(zoneId,editorId,callback){
+ const z=document.getElementById(zoneId),ed=document.getElementById(editorId); if(!z||!ed)return;
+ z.ondragover=e=>e.preventDefault(); z.ondrop=e=>{e.preventDefault();filesToData([...e.dataTransfer.files],callback)};
+ ed.onpaste=e=>{const fs=[...e.clipboardData.items].filter(i=>i.type.startsWith('image/')).map(i=>i.getAsFile());if(fs.length){e.preventDefault();filesToData(fs,callback)}};
+}
+function filesToData(files,cb){files.filter(f=>f&&f.type.startsWith('image/')).forEach(f=>{const r=new FileReader();r.onload=()=>cb({id:uid(),name:f.name||'pasted-image',data:r.result});r.readAsDataURL(f)})}
 
+function isRoutineDue(r,date){const wd=new Date(date+'T12:00:00').getDay();if(r.repeat==='daily')return true;if(r.repeat==='weekdays')return wd>=1&&wd<=5;return(r.weekdays||[]).includes(wd)}
+function getRLog(d,id){return state.routineLogs?.[d]?.[id]||null}
+async function setRoutineStatus(d,id,status){
+ state.routineLogs[d]??={}; const old=state.routineLogs[d][id]||{subtasks:{}};
+ state.routineLogs[d][id]={...old,status,completedAt:status==='done'?Date.now():null}; await saveState();renderAll()
+}
+async function toggleRoutineSub(d,rid,sid,done){
+ state.routineLogs[d]??={};state.routineLogs[d][rid]??={status:'',subtasks:{}};state.routineLogs[d][rid].subtasks??={};
+ state.routineLogs[d][rid].subtasks[sid]=done?{done:true,completedAt:Date.now()}:{done:false,completedAt:null};await saveState();renderAll()
+}
+function routineItem(r,d){
+ const log=getRLog(d,r.id),st=log?.status||'';
+ return `<div class="item"><div class="item-row"><div><div class="item-title">${esc(r.name)}</div><div class="item-meta">${log?.completedAt?'主任务完成 '+fmtTime(log.completedAt):'主任务未完成'}</div></div>
+ <div class="status-group"><button class="status-btn done ${st==='done'?'active':''}" onclick="setRoutineStatus('${d}','${r.id}','done')">✅完成</button><button class="status-btn leave ${st==='leave'?'active':''}" onclick="setRoutineStatus('${d}','${r.id}','leave')">🏖休假</button><button class="status-btn na ${st==='na'?'active':''}" onclick="setRoutineStatus('${d}','${r.id}','na')">➖N/A</button><button class="status-btn miss ${st==='miss'?'active':''}" onclick="setRoutineStatus('${d}','${r.id}','miss')">✕未完成</button></div></div>
+ ${(r.subtasks||[]).map(s=>{const sl=log?.subtasks?.[s.id];return `<label class="checkbox-line subtask"><input type="checkbox" ${sl?.done?'checked':''} onchange="toggleRoutineSub('${d}','${r.id}','${s.id}',this.checked)"><span>${esc(s.title)}</span><span class="item-meta">${sl?.completedAt?fmtTime(sl.completedAt):''}</span></label>`}).join('')}
+ </div>`
+}
 function renderToday(){
-  const date=todayISO(), routines=state.routines.filter(r=>isRoutineDue(r,date));
-  const done=routines.filter(r=>getRoutineLog(date,r.id)?.status==='done').length;
-  const activeExec=state.executions.find(e=>!e.completedAt);
-  $('#page-today').innerHTML=`
-    <div class="grid grid-3">
-      <div class="card"><div class="kpi">${done}/${routines.length}</div><div class="kpi-label">今日 Routine 完成</div></div>
-      <div class="card"><div class="kpi">${state.kanban.filter(x=>x.status!=='done').length}</div><div class="kpi-label">未完成 Kanban</div></div>
-      <div class="card"><div class="kpi">${state.executions.length}</div><div class="kpi-label">SOP 执行历史</div></div>
-    </div>
-    <div class="grid grid-2" style="margin-top:18px">
-      <div class="card">
-        <div class="section-title"><h2>🔁 今日 Routine</h2><button class="small-btn" onclick="goPage('routine')">查看历史</button></div>
-        <div class="progress"><div style="width:${routines.length?done/routines.length*100:0}%"></div></div>
-        <div class="list" style="margin-top:14px">${routines.map(r=>routineItemHtml(r,date)).join('')||'<div class="empty">今天没有 Routine</div>'}</div>
-      </div>
-      <div class="card">
-        <div class="section-title"><h2>📚 Running SOP</h2><button class="small-btn" onclick="goPage('sop')">SOP</button></div>
-        ${activeExec ? renderExecutionCompact(activeExec) : '<div class="empty">当前没有执行中的 SOP</div>'}
-      </div>
-    </div>
-    <div class="card" style="margin-top:18px">
-      <div class="section-title"><h2>📊 Today's Work</h2><button class="small-btn" onclick="goPage('kanban')">打开看板</button></div>
-      <div class="list">${state.kanban.filter(x=>x.status!=='done').slice(0,6).map(x=>`<div class="item"><div class="item-title">${esc(x.title)}</div><div class="item-meta">${x.status==='todo'?'TODO':'DOING'}</div></div>`).join('')||'<div class="empty">没有待办</div>'}</div>
-    </div>`;
+ const d=todayISO(),rs=state.routines.filter(r=>isRoutineDue(r,d)),done=rs.filter(r=>getRLog(d,r.id)?.status==='done').length;
+ const activeP=state.projects.filter(p=>p.status!=='done').length;
+ $('#page-today').innerHTML=`<div class="grid grid-3"><div class="card"><div class="kpi">${done}/${rs.length}</div><div class="kpi-label">今日 Routine</div></div><div class="card"><div class="kpi">${activeP}</div><div class="kpi-label">长期任务 / Projects</div></div><div class="card"><div class="kpi">${state.kanban.filter(x=>x.status!=='done').length}</div><div class="kpi-label">Kanban 未完成</div></div></div>
+ <div class="grid grid-2" style="margin-top:18px"><div class="card"><div class="section-title"><h2>今日 Routine</h2><button class="small-btn" onclick="goPage('routine')">历史</button></div>${rs.map(r=>routineItem(r,d)).join('')}</div>
+ <div class="card"><div class="section-title"><h2>长期任务</h2><button class="small-btn" onclick="goPage('projects')">全部</button></div>${state.projects.filter(p=>p.status!=='done').slice(0,6).map(p=>`<div class="item project-row" onclick="openProject('${p.id}')"><div class="item-title">${esc(p.title)}</div><div class="tags">${tagHtml(p.tags)}</div></div>`).join('')||'<div class="empty">还没有长期任务</div>'}</div></div>`
 }
 
-let routineViewDate=todayISO();
+function repeatText(r){if(r.repeat==='daily')return'每天';if(r.repeat==='weekdays')return'工作日';return'指定星期'}
 function renderRoutine(){
-  const date=routineViewDate;
-  const due=state.routines.filter(r=>isRoutineDue(r,date));
-  $('#page-routine').innerHTML=`
-    <div class="card">
-      <div class="section-title">
-        <h2>Daily Routine</h2>
-        <div><button class="ghost-btn" onclick="routineViewDate=todayISO();renderRoutine()">今天</button>
-        <button class="primary-btn" onclick="openRoutineModal()">＋ 新建 Routine</button></div>
-      </div>
-      <div class="form-row">
-        <div class="form-field"><label>查看日期</label><input type="date" value="${date}" onchange="routineViewDate=this.value;renderRoutine()"/></div>
-        <div class="form-field"><label>日期</label><div class="item">${fmtDate(date)}</div></div>
-      </div>
-      <div class="list" style="margin-top:16px">${due.map(r=>routineItemHtml(r,date)).join('')||'<div class="empty">这一天没有 Routine</div>'}</div>
-    </div>
-    <div class="card" style="margin-top:18px">
-      <div class="section-title"><h2>历史月历</h2><span class="muted">✅完成　🏖休假　➖不适用　✕未完成</span></div>
-      ${renderRoutineCalendar(date)}
-    </div>
-    <div class="card" style="margin-top:18px">
-      <div class="section-title"><h2>Routine 管理</h2></div>
-      <div class="list">${state.routines.map(r=>`
-        <div class="item"><div class="item-row"><div><div class="item-title">${esc(r.name)}</div><div class="item-meta">${repeatText(r)}</div></div>
-        <div><button class="small-btn" onclick="openRoutineModal('${r.id}')">编辑</button> <button class="danger-btn" onclick="deleteRoutine('${r.id}')">删除</button></div></div></div>`).join('')}</div>
-    </div>`;
-}
-function repeatText(r){
-  if(r.repeat==='daily') return '每天';
-  if(r.repeat==='weekdays') return '工作日';
-  const names=['日','一','二','三','四','五','六'];
-  return '每周 '+(r.weekdays||[]).map(x=>'周'+names[x]).join('、');
-}
-function renderRoutineCalendar(dateStr){
-  const d=new Date(dateStr+'T12:00:00'), y=d.getFullYear(), m=d.getMonth();
-  const first=new Date(y,m,1), last=new Date(y,m+1,0), start=first.getDay();
-  let cells=['日','一','二','三','四','五','六'].map(x=>`<div class="muted" style="text-align:center">${x}</div>`);
-  for(let i=0;i<start;i++) cells.push('<div></div>');
-  for(let day=1;day<=last.getDate();day++){
-    const ds=`${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-    const icons=[];
-    state.routines.filter(r=>isRoutineDue(r,ds)).forEach(r=>{
-      const st=getRoutineLog(ds,r.id)?.status;
-      if(st==='done') icons.push('✅'); else if(st==='leave') icons.push('🏖'); else if(st==='na') icons.push('➖'); else if(st==='miss') icons.push('✕');
-    });
-    cells.push(`<div class="day ${ds===todayISO()?'today':''}" onclick="routineViewDate='${ds}';renderRoutine()"><div class="num">${day}</div><div class="day-events">${icons.slice(0,8).map(i=>`<span class="dot">${i}</span>`).join('')}</div></div>`);
-  }
-  return `<div class="calendar">${cells.join('')}</div>`;
+ const due=state.routines.filter(r=>isRoutineDue(r,routineViewDate));
+ $('#page-routine').innerHTML=`<div class="card"><div class="section-title"><h2>Daily Routine</h2><button class="primary-btn" onclick="openRoutineModal()">＋ 新建 Routine</button></div>
+ <div class="form-row"><div class="form-field"><label>查看日期</label><input type="date" value="${routineViewDate}" onchange="routineViewDate=this.value;renderRoutine()"></div><div class="item">${fmtDate(routineViewDate)}</div></div>
+ <div class="list" style="margin-top:14px">${due.map(r=>routineItem(r,routineViewDate)).join('')}</div></div>
+ <div class="card" style="margin-top:18px"><h2>Routine 管理</h2>${state.routines.map(r=>`<div class="item"><div class="item-row"><div><b>${esc(r.name)}</b><div class="item-meta">${repeatText(r)} · ${(r.subtasks||[]).length} 个子任务</div></div><button class="small-btn" onclick="openRoutineModal('${r.id}')">编辑</button></div></div>`).join('')}</div>`
 }
 function openRoutineModal(id){
-  const r=state.routines.find(x=>x.id===id)||{name:'',repeat:'weekdays',weekdays:[1,2,3,4,5]};
-  modal(`<h2>${id?'编辑':'新建'} Routine</h2>
-    <div class="form-field"><label>名称</label><input id="rName" value="${esc(r.name)}"/></div>
-    <div class="form-field" style="margin-top:10px"><label>重复</label>
-      <select id="rRepeat"><option value="daily" ${r.repeat==='daily'?'selected':''}>每天</option><option value="weekdays" ${r.repeat==='weekdays'?'selected':''}>工作日</option><option value="custom" ${r.repeat==='custom'?'selected':''}>指定星期</option></select>
-    </div>
-    <div style="margin-top:10px">${['日','一','二','三','四','五','六'].map((n,i)=>`<label class="checkbox-line"><input type="checkbox" class="rWeek" value="${i}" ${(r.weekdays||[]).includes(i)?'checked':''}/> 周${n}</label>`).join('')}</div>
-    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRoutineModal('${id||''}')">保存</button></div>`);
+ const r=state.routines.find(x=>x.id===id)||{name:'',repeat:'weekdays',weekdays:[1,2,3,4,5],subtasks:[]};
+ modal(`<h2>${id?'编辑':'新建'} Routine</h2><div class="form-field"><label>名称</label><input id="rName" value="${esc(r.name)}"></div>
+ <div class="form-field"><label>重复</label><select id="rRepeat"><option value="daily" ${r.repeat==='daily'?'selected':''}>每天</option><option value="weekdays" ${r.repeat==='weekdays'?'selected':''}>工作日</option><option value="custom" ${r.repeat==='custom'?'selected':''}>指定星期</option></select></div>
+ <div>${['日','一','二','三','四','五','六'].map((n,i)=>`<label class="checkbox-line"><input type="checkbox" class="rWeek" value="${i}" ${(r.weekdays||[]).includes(i)?'checked':''}>周${n}</label>`).join('')}</div>
+ <h3>子任务</h3><div id="rSubs">${(r.subtasks||[]).map(s=>`<div class="item rsub" data-id="${s.id}"><input class="rsub-title" value="${esc(s.title)}"><button class="danger-btn" onclick="this.parentElement.remove()">删除</button></div>`).join('')}</div>
+ <button class="small-btn" onclick="$('#rSubs').insertAdjacentHTML('beforeend','<div class=&quot;item rsub&quot; data-id=&quot;${uid()}&quot;><input class=&quot;rsub-title&quot;><button class=&quot;danger-btn&quot; onclick=&quot;this.parentElement.remove()&quot;>删除</button></div>')">＋子任务</button>
+ <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRoutine('${id||''}')">保存</button></div>`)
 }
-async function saveRoutineModal(id){
-  const item={id:id||uid(),name:$('#rName').value.trim(),repeat:$('#rRepeat').value,weekdays:$$('.rWeek:checked').map(x=>+x.value),createdAt:Date.now()};
-  if(!item.name) return toast('请输入名称');
-  if(id) state.routines[state.routines.findIndex(x=>x.id===id)]={...state.routines.find(x=>x.id===id),...item}; else state.routines.push(item);
-  await saveState(); closeModal(); renderAll();
+async function saveRoutine(id){
+ const x={id:id||uid(),name:$('#rName').value.trim(),repeat:$('#rRepeat').value,weekdays:$$('.rWeek:checked').map(x=>+x.value),subtasks:$$('.rsub').map(e=>({id:e.dataset.id,title:e.querySelector('.rsub-title').value.trim()})).filter(x=>x.title)};
+ if(id)state.routines[state.routines.findIndex(r=>r.id===id)]=x;else state.routines.push(x);await saveState();closeModal();renderAll()
 }
-async function deleteRoutine(id){
-  if(!confirm('删除这个 Routine？历史记录会保留在备份里，但页面不再显示。')) return;
-  state.routines=state.routines.filter(x=>x.id!==id); await saveState(); renderAll();
+
+let projectFilter='';
+function renderProjects(){
+ const cats=state.projectCategories;
+ $('#page-projects').innerHTML=`<div class="section-title"><h2>长期任务 / Projects</h2><div><button class="ghost-btn" onclick="openCategoryModal()">＋ 分类</button> <button class="primary-btn" onclick="openProjectCreate()">＋ 新建项目</button></div></div>
+ <div class="filterbar"><input placeholder="搜索标题 / 标签" value="${esc(projectFilter)}" oninput="projectFilter=this.value;renderProjects()"></div>
+ ${cats.map(c=>{const ps=state.projects.filter(p=>p.categoryId===c.id).filter(projectMatch);return `<div class="card category-card" style="margin-bottom:16px"><div class="section-title"><h2>${esc(c.name)}</h2><button class="small-btn" onclick="openCategoryModal('${c.id}')">编辑分类</button></div>
+ ${ps.map(p=>projectSummary(p)).join('')||'<div class="empty">这个分类还没有项目</div>'}</div>`}).join('')}
+ <div class="card category-card"><div class="section-title"><h2>未分类</h2></div>${state.projects.filter(p=>!p.categoryId).filter(projectMatch).map(projectSummary).join('')||'<div class="empty">无</div>'}</div>`
 }
+function projectMatch(p){const q=projectFilter.trim().toLowerCase();return !q||p.title.toLowerCase().includes(q)||(p.tags||[]).some(t=>t.toLowerCase().includes(q))}
+function projectSummary(p){return `<div class="item project-row" onclick="openProject('${p.id}')"><div class="item-row"><div><div class="item-title">${esc(p.title)}</div><div class="item-meta">${p.startAt||'-'} → ${p.endAt||'进行中'} · ${esc(p.status||'doing')}</div><div class="tags">${tagHtml(p.tags)}</div></div><span>›</span></div></div>`}
+function openCategoryModal(id){
+ const c=state.projectCategories.find(x=>x.id===id)||{name:''};modal(`<h2>${id?'编辑':'新建'}分类</h2><input id="catName" value="${esc(c.name)}"><div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveCategory('${id||''}')">保存</button></div>`)
+}
+async function saveCategory(id){const n=$('#catName').value.trim();if(!n)return;if(id)state.projectCategories.find(x=>x.id===id).name=n;else state.projectCategories.push({id:uid(),name:n});await saveState();closeModal();renderProjects()}
+function openProjectCreate(){
+ modal(`<h2>新建长期任务</h2><div class="form-field"><label>标题</label><input id="pTitle"></div><div class="form-field"><label>分类</label><select id="pCat"><option value="">未分类</option>${state.projectCategories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+ <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="createProject()">创建</button></div>`)
+}
+async function createProject(){
+ const p={id:uid(),title:$('#pTitle').value.trim(),categoryId:$('#pCat').value,status:'doing',tags:[],startAt:'',endAt:'',html:'',subtasks:[],handoffs:[],reports:[],questions:[],investigations:[],images:[],createdAt:Date.now()};
+ if(!p.title)return;state.projects.unshift(p);await saveState();closeModal();renderProjects();openProject(p.id)
+}
+function openProject(id){
+ const p=state.projects.find(x=>x.id===id);if(!p)return;
+ drawer(`<div class="drawer-head"><div><h2 style="margin:0">${esc(p.title)}</h2><div class="tags">${tagHtml(p.tags)}</div></div><button class="ghost-btn" onclick="closeDrawer()">✕</button></div>
+ <div class="form-row" style="margin-top:14px"><div class="form-field"><label>标题</label><input id="pdTitle" value="${esc(p.title)}"></div><div class="form-field"><label>分类</label><select id="pdCat"><option value="">未分类</option>${state.projectCategories.map(c=>`<option value="${c.id}" ${p.categoryId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div></div>
+ <div class="form-row"><div class="form-field"><label>主任务开始日期时间</label><input type="datetime-local" id="pdStart" value="${esc(p.startAt||'')}"></div><div class="form-field"><label>主任务结束日期时间</label><input type="datetime-local" id="pdEnd" value="${esc(p.endAt||'')}"></div></div>
+ <div class="form-row"><div class="form-field"><label>状态</label><select id="pdStatus"><option value="todo" ${p.status==='todo'?'selected':''}>TODO</option><option value="doing" ${p.status==='doing'?'selected':''}>DOING</option><option value="waiting" ${p.status==='waiting'?'selected':''}>WAITING</option><option value="done" ${p.status==='done'?'selected':''}>DONE</option></select></div><div class="form-field"><label>标签（逗号分隔）</label><input id="pdTags" value="${esc((p.tags||[]).join(', '))}"></div></div>
+ <h3>项目 Memo</h3>${richEditor('projectRich',p.html,'记录背景、处理思路、内部说明…')}
+ <div id="projectDrop" class="drop-zone">Ctrl+V 粘贴截图，或拖图片到这里</div>${imageGrid(p.images,'project',p.id)}
+ <h3>子任务</h3><div id="projectSubs">${(p.subtasks||[]).map(projectSubRow).join('')}</div><button class="small-btn" onclick="addProjectSub('${p.id}')">＋ 子任务</button>
+ ${noteSection('交接 / 对接人员','handoffs',p)}
+ ${noteSection('汇报记录','reports',p)}
+ ${noteSection('被提出的问题','questions',p)}
+ ${noteSection('需要调查的地方','investigations',p)}
+ <div class="modal-actions"><button class="danger-btn" onclick="deleteProject('${p.id}')">删除项目</button><button class="primary-btn" onclick="saveProjectDrawer('${p.id}')">保存</button></div>`);
+ wireImageDrop('projectDrop','projectRich',async im=>{p.images.push(im);await saveState();openProject(p.id)})
+}
+function projectSubRow(s){return `<div class="item psub" data-id="${s.id}"><input class="ps-title" value="${esc(s.title)}"><div class="form-row" style="margin-top:8px"><input type="datetime-local" class="ps-start" value="${esc(s.startAt||'')}"><input type="datetime-local" class="ps-end" value="${esc(s.endAt||'')}"></div><textarea class="ps-note" placeholder="子任务 Memo">${esc(s.note||'')}</textarea><button class="danger-btn" onclick="this.closest('.psub').remove()">删除</button></div>`}
+function addProjectSub(){const html=projectSubRow({id:uid(),title:'',startAt:'',endAt:'',note:''});$('#projectSubs').insertAdjacentHTML('beforeend',html)}
+function noteSection(title,key,p){return `<h3>${title}</h3><div id="${key}List">${(p[key]||[]).map(n=>`<div class="timeline-note nrow" data-id="${n.id}"><div class="form-row"><input class="n-date" type="datetime-local" value="${esc(n.date||'')}"><input class="n-who" placeholder="人员 / 对象" value="${esc(n.who||'')}"></div><textarea class="n-text">${esc(n.text||'')}</textarea><button class="danger-btn" onclick="this.parentElement.remove()">删除</button></div>`).join('')}</div><button class="small-btn" onclick="addNoteRow('${key}List')">＋ 添加记录</button>`}
+function addNoteRow(id){document.getElementById(id).insertAdjacentHTML('beforeend',`<div class="timeline-note nrow" data-id="${uid()}"><div class="form-row"><input class="n-date" type="datetime-local"><input class="n-who" placeholder="人员 / 对象"></div><textarea class="n-text"></textarea><button class="danger-btn" onclick="this.parentElement.remove()">删除</button></div>`)}
+function collectNotes(id){return [...document.querySelectorAll(`#${id} .nrow`)].map(e=>({id:e.dataset.id,date:e.querySelector('.n-date').value,who:e.querySelector('.n-who').value.trim(),text:e.querySelector('.n-text').value.trim()})).filter(x=>x.date||x.who||x.text)}
+async function saveProjectDrawer(id){
+ const p=state.projects.find(x=>x.id===id);Object.assign(p,{title:$('#pdTitle').value.trim(),categoryId:$('#pdCat').value,startAt:$('#pdStart').value,endAt:$('#pdEnd').value,status:$('#pdStatus').value,tags:splitTags($('#pdTags').value),html:$('#projectRich').innerHTML,
+ subtasks:$$('.psub').map(e=>({id:e.dataset.id,title:e.querySelector('.ps-title').value.trim(),startAt:e.querySelector('.ps-start').value,endAt:e.querySelector('.ps-end').value,note:e.querySelector('.ps-note').value.trim()})).filter(x=>x.title),
+ handoffs:collectNotes('handoffsList'),reports:collectNotes('reportsList'),questions:collectNotes('questionsList'),investigations:collectNotes('investigationsList')});
+ await saveState();closeDrawer();renderProjects();toast('项目已保存')
+}
+async function deleteProject(id){if(!confirm('删除这个项目？'))return;state.projects=state.projects.filter(x=>x.id!==id);await saveState();closeDrawer();renderProjects()}
+
+let kanbanFilter='';
+function renderKanban(){
+ const cols=state.kanbanColumns;
+ $('#page-kanban').innerHTML=`<div class="section-title"><h2>Kanban</h2><div><button class="ghost-btn" onclick="addKanbanColumn()">＋ 新列</button> <button class="primary-btn" onclick="openKanbanCard()">＋ 新建卡片</button></div></div>
+ <div class="filterbar"><input placeholder="按标题 / 标签筛选" value="${esc(kanbanFilter)}" oninput="kanbanFilter=this.value;renderKanban()"></div>
+ <div class="kanban">${cols.map(c=>`<div class="kanban-col" ondragover="event.preventDefault()" ondrop="dropTask(event,'${c.id}')"><div class="item-row"><h3>${esc(c.name)}</h3><button class="small-btn" onclick="renameKanbanColumn('${c.id}')">⋯</button></div>
+ ${state.kanban.filter(x=>x.status===c.id).filter(k=>!kanbanFilter||k.title.toLowerCase().includes(kanbanFilter.toLowerCase())||(k.tags||[]).some(t=>t.toLowerCase().includes(kanbanFilter.toLowerCase()))).map(cardHtml).join('')}</div>`).join('')}</div>`
+}
+function cardHtml(t){return `<div class="task-card" draggable="true" ondragstart="event.dataTransfer.setData('text/plain','${t.id}')" onclick="openKanbanCard('${t.id}')"><div class="item-title">${esc(t.title)}</div><div class="tags">${tagHtml(t.tags)}</div><div class="item-meta">${(t.checks||[]).filter(x=>x.done).length}/${(t.checks||[]).length} 子任务 · ${(t.images||[]).length} 图片</div></div>`}
+function addKanbanColumn(){const n=prompt('新列名称，例如 REVIEW / BLOCKED');if(!n)return;state.kanbanColumns.push({id:uid(),name:n});saveState().then(renderKanban)}
+function renameKanbanColumn(id){const c=state.kanbanColumns.find(x=>x.id===id),n=prompt('列名称',c.name);if(!n)return;c.name=n;saveState().then(renderKanban)}
+async function dropTask(ev,status){const t=state.kanban.find(x=>x.id===ev.dataTransfer.getData('text/plain'));if(t){t.status=status;await saveState();renderKanban()}}
+function openKanbanCard(id){
+ const t=state.kanban.find(x=>x.id===id)||{id:'',title:'',status:state.kanbanColumns[0]?.id||'todo',html:'',checks:[],images:[],tags:[]};
+ drawer(`<div class="drawer-head"><h2>${id?'Kanban 卡片':'新建 Kanban 卡片'}</h2><button class="ghost-btn" onclick="closeDrawer()">✕</button></div>
+ <div class="form-field"><label>标题</label><input id="kcTitle" value="${esc(t.title)}"></div><div class="form-row"><div class="form-field"><label>状态</label><select id="kcStatus">${state.kanbanColumns.map(c=>`<option value="${c.id}" ${t.status===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div><div class="form-field"><label>标签</label><input id="kcTags" value="${esc((t.tags||[]).join(', '))}"></div></div>
+ <h3>Memo</h3>${richEditor('kanbanRich',t.html,'支持粗体、下划线、颜色、缩进、链接…')}
+ <h3>Checkbox / 子任务</h3><div id="kcChecks">${(t.checks||[]).map(checkRow).join('')}</div><button class="small-btn" onclick="addCheckRow('kcChecks')">＋ Checkbox</button>
+ <div id="kanbanDrop" class="drop-zone">Ctrl+V 粘贴截图，或拖图片到这里</div>${imageGrid(t.images,'kanban',t.id)}
+ <div class="modal-actions">${id?`<button class="danger-btn" onclick="deleteKanban('${t.id}')">删除</button>`:''}<button class="primary-btn" onclick="saveKanbanDrawer('${t.id}')">保存</button></div>`);
+ wireImageDrop('kanbanDrop','kanbanRich',async im=>{t.images.push(im); if(id){await saveState();openKanbanCard(id)} else {window.__newKanbanImages=(window.__newKanbanImages||[]).concat(im);toast('图片已暂存，保存卡片后生效')}})
+}
+function checkRow(c){return `<div class="item check-row" data-id="${c.id}"><label class="checkbox-line"><input type="checkbox" class="c-done" ${c.done?'checked':''}><input class="c-text" value="${esc(c.text)}"></label></div>`}
+function addCheckRow(id){document.getElementById(id).insertAdjacentHTML('beforeend',checkRow({id:uid(),text:'',done:false}))}
+function collectChecks(sel){return $$(sel+' .check-row').map(e=>({id:e.dataset.id,text:e.querySelector('.c-text').value.trim(),done:e.querySelector('.c-done').checked})).filter(x=>x.text)}
+async function saveKanbanDrawer(id){
+ let t=id?state.kanban.find(x=>x.id===id):{id:uid(),images:window.__newKanbanImages||[]};Object.assign(t,{title:$('#kcTitle').value.trim(),status:$('#kcStatus').value,tags:splitTags($('#kcTags').value),html:$('#kanbanRich').innerHTML,checks:collectChecks('#kcChecks')});
+ if(!id)state.kanban.push(t);window.__newKanbanImages=[];await saveState();closeDrawer();renderKanban()
+}
+async function deleteKanban(id){state.kanban=state.kanban.filter(x=>x.id!==id);await saveState();closeDrawer();renderKanban()}
+function imageGrid(images,type,id){return `<div class="memo-images">${(images||[]).map(im=>`<div><img src="${im.data}"><button class="danger-btn" onclick="deleteImage('${type}','${id}','${im.id}')">删除</button></div>`).join('')}</div>`}
+async function deleteImage(type,id,iid){const arr=type==='kanban'?state.kanban.find(x=>x.id===id)?.images:type==='memo'?state.memos.find(x=>x.id===id)?.images:state.projects.find(x=>x.id===id)?.images;if(arr){const i=arr.findIndex(x=>x.id===iid);if(i>=0)arr.splice(i,1);await saveState(); if(type==='kanban')openKanbanCard(id);if(type==='memo')renderMemo();if(type==='project')openProject(id)}}
+
+let memoFilter='';
+function renderMemo(){
+ if(!activeMemoId&&state.memos[0])activeMemoId=state.memos[0].id;const m=state.memos.find(x=>x.id===activeMemoId);
+ $('#page-memo').innerHTML=`<div class="grid grid-2" style="grid-template-columns:300px 1fr"><div class="card"><div class="section-title"><h2>Memos</h2><button class="small-btn" onclick="newMemo()">＋</button></div><input placeholder="标题 / 标签筛选" value="${esc(memoFilter)}" oninput="memoFilter=this.value;renderMemo()">
+ ${state.memos.filter(x=>!memoFilter||x.title.toLowerCase().includes(memoFilter.toLowerCase())||(x.tags||[]).some(t=>t.toLowerCase().includes(memoFilter.toLowerCase()))).map(x=>`<div class="item project-row" onclick="activeMemoId='${x.id}';renderMemo()"><b>${esc(x.title)}</b><div class="tags">${tagHtml(x.tags)}</div></div>`).join('')}</div>
+ <div class="card">${m?memoEditor(m):'<div class="empty">新建一个 Memo</div>'}</div></div>`;
+ if(m)wireImageDrop('memoDrop','memoRich',async im=>{m.images.push(im);m.updatedAt=Date.now();await saveState();renderMemo()})
+}
+function memoEditor(m){return `<div class="form-row"><input id="memoTitle" value="${esc(m.title)}"><input id="memoTags" placeholder="标签" value="${esc((m.tags||[]).join(', '))}"></div>
+ <h3>内容</h3>${richEditor('memoRich',m.html,'Memo…')}<h3>Checkbox / 子任务</h3><div id="memoChecks">${(m.checks||[]).map(checkRow).join('')}</div><button class="small-btn" onclick="addCheckRow('memoChecks')">＋ Checkbox</button>
+ <div id="memoDrop" class="drop-zone">Ctrl+V 粘贴截图，或拖图片到这里</div>${imageGrid(m.images,'memo',m.id)}
+ <div class="modal-actions"><button class="danger-btn" onclick="deleteMemo('${m.id}')">删除</button><button class="primary-btn" onclick="saveMemo('${m.id}')">保存</button></div>`}
+async function newMemo(){const m={id:uid(),title:'New Memo',html:'',checks:[],images:[],tags:[],updatedAt:Date.now()};state.memos.unshift(m);activeMemoId=m.id;await saveState();renderMemo()}
+async function saveMemo(id){const m=state.memos.find(x=>x.id===id);Object.assign(m,{title:$('#memoTitle').value.trim(),tags:splitTags($('#memoTags').value),html:$('#memoRich').innerHTML,checks:collectChecks('#memoChecks'),updatedAt:Date.now()});await saveState();toast('Memo 已保存');renderMemo()}
+async function deleteMemo(id){if(!confirm('删除 Memo？'))return;state.memos=state.memos.filter(x=>x.id!==id);activeMemoId=state.memos[0]?.id||null;await saveState();renderMemo()}
 
 function renderSOP(){
-  $('#page-sop').innerHTML=`
-    <div class="section-title"><h2>SOP Templates</h2><button class="primary-btn" onclick="openSopTemplateModal()">＋ 新建 SOP</button></div>
-    <div class="grid grid-2">${state.sopTemplates.map(t=>`
-      <div class="card">
-        <div class="item-row"><div><span class="pill">${esc(t.category||'General')}</span><h2 style="margin:8px 0 4px">${esc(t.name)}</h2><div class="muted">${esc(t.description||'')}</div></div></div>
-        <div style="margin:14px 0">${t.steps.map((s,i)=>`<div class="item-meta">${i+1}. ${esc(s.title)}</div>`).join('')}</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="primary-btn" onclick="startSop('${t.id}')">▶ 开始作业</button><button class="ghost-btn" onclick="openSopTemplateModal('${t.id}')">编辑模板</button><button class="danger-btn" onclick="deleteSop('${t.id}')">删除</button></div>
-      </div>`).join('')||'<div class="card empty">还没有 SOP 模板</div>'}
-    </div>`;
+ $('#page-sop').innerHTML=`<div class="section-title"><h2>SOP Templates</h2><button class="primary-btn" onclick="openSopTemplate()">＋ 新建 SOP</button></div><div class="grid grid-2">${state.sopTemplates.map(t=>`<div class="card"><span class="pill">${esc(t.category||'General')}</span><h2>${esc(t.name)}</h2><div class="muted">${esc(t.description||'')}</div><div style="margin:12px 0">${t.steps.map((s,i)=>`<div class="item-meta">${i+1}. ${esc(s.title)}</div>`).join('')}</div><button class="primary-btn" onclick="startSop('${t.id}')">▶ 开始作业</button> <button class="ghost-btn" onclick="openSopTemplate('${t.id}')">编辑</button></div>`).join('')}</div>`
 }
-function openSopTemplateModal(id){
-  const t=state.sopTemplates.find(x=>x.id===id)||{name:'',category:'',description:'',links:[],steps:[{id:uid(),title:'',note:''}]};
-  modal(`<h2>${id?'编辑':'新建'} SOP Template</h2>
-    <div class="form-row"><div class="form-field"><label>名称</label><input id="sopName" value="${esc(t.name)}"/></div><div class="form-field"><label>分类</label><input id="sopCat" value="${esc(t.category)}"/></div></div>
-    <div class="form-field" style="margin-top:10px"><label>说明</label><textarea id="sopDesc">${esc(t.description)}</textarea></div>
-    <div class="form-field" style="margin-top:10px"><label>参考链接（每行一个）</label><textarea id="sopLinks">${(t.links||[]).join('\n')}</textarea></div>
-    <h3>步骤</h3><div id="stepEditor">${t.steps.map((s,i)=>stepEditRow(s,i)).join('')}</div>
-    <button class="small-btn" onclick="addStepEditor()">＋ 添加步骤</button>
-    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveSopTemplate('${id||''}')">保存模板</button></div>`);
+function openSopTemplate(id){
+ const t=state.sopTemplates.find(x=>x.id===id)||{name:'',category:'',description:'',links:[],steps:[]};
+ modal(`<h2>${id?'编辑':'新建'} SOP</h2><div class="form-row"><input id="sName" placeholder="名称" value="${esc(t.name)}"><input id="sCat" placeholder="分类" value="${esc(t.category||'')}"></div><textarea id="sDesc">${esc(t.description||'')}</textarea><h3>步骤</h3><div id="sSteps">${t.steps.map(s=>`<div class="item sstep" data-id="${s.id}"><input class="ss-title" value="${esc(s.title)}"><textarea class="ss-note">${esc(s.note||'')}</textarea><button class="danger-btn" onclick="this.parentElement.remove()">删除</button></div>`).join('')}</div><button class="small-btn" onclick="$('#sSteps').insertAdjacentHTML('beforeend','<div class=&quot;item sstep&quot; data-id=&quot;${uid()}&quot;><input class=&quot;ss-title&quot;><textarea class=&quot;ss-note&quot;></textarea><button class=&quot;danger-btn&quot; onclick=&quot;this.parentElement.remove()&quot;>删除</button></div>')">＋步骤</button><div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveSop('${id||''}')">保存</button></div>`)
 }
-function stepEditRow(s,i){return `<div class="item step-edit" data-id="${s.id||uid()}" style="margin-bottom:8px">
-  <div class="form-field"><label>步骤 ${i+1}</label><input class="step-title" value="${esc(s.title)}"/></div>
-  <div class="form-field" style="margin-top:6px"><label>备注 / 命令 / 注意事项</label><textarea class="step-note">${esc(s.note||'')}</textarea></div>
-  <button class="danger-btn" onclick="this.closest('.step-edit').remove()">删除步骤</button></div>`}
-function addStepEditor(){ $('#stepEditor').insertAdjacentHTML('beforeend',stepEditRow({id:uid(),title:'',note:''},$$('.step-edit').length)); }
-async function saveSopTemplate(id){
-  const item={id:id||uid(),name:$('#sopName').value.trim(),category:$('#sopCat').value.trim(),description:$('#sopDesc').value.trim(),
-    links:$('#sopLinks').value.split('\n').map(x=>x.trim()).filter(Boolean),
-    steps:$$('.step-edit').map(el=>({id:el.dataset.id,title:el.querySelector('.step-title').value.trim(),note:el.querySelector('.step-note').value.trim()})).filter(s=>s.title)};
-  if(!item.name) return toast('请输入 SOP 名称');
-  if(id) state.sopTemplates[state.sopTemplates.findIndex(x=>x.id===id)]=item; else state.sopTemplates.push(item);
-  await saveState(); closeModal(); renderAll();
-}
-async function deleteSop(id){ if(!confirm('删除这个 SOP 模板？历史执行记录不会删除。'))return; state.sopTemplates=state.sopTemplates.filter(x=>x.id!==id); await saveState(); renderAll(); }
+async function saveSop(id){const t={id:id||uid(),name:$('#sName').value.trim(),category:$('#sCat').value.trim(),description:$('#sDesc').value.trim(),links:[],steps:$$('.sstep').map(e=>({id:e.dataset.id,title:e.querySelector('.ss-title').value.trim(),note:e.querySelector('.ss-note').value.trim()})).filter(x=>x.title)};if(id)state.sopTemplates[state.sopTemplates.findIndex(x=>x.id===id)]=t;else state.sopTemplates.push(t);await saveState();closeModal();renderSOP()}
+function startSop(id){const t=state.sopTemplates.find(x=>x.id===id);modal(`<h2>开始：${esc(t.name)}</h2><input id="eDate" type="date" value="${todayISO()}"><input id="eEnv" placeholder="环境 / 对象"><textarea id="eNote" placeholder="备注"></textarea><div class="modal-actions"><button class="primary-btn" onclick="createExec('${id}')">创建执行记录</button></div>`)}
+async function createExec(id){const t=state.sopTemplates.find(x=>x.id===id),e={id:uid(),templateId:id,templateName:t.name,date:$('#eDate').value,environment:$('#eEnv').value,note:$('#eNote').value,steps:t.steps.map(s=>({id:uid(),title:s.title,note:s.note,startedAt:null,completedAt:null,memo:''})),createdAt:Date.now(),completedAt:null};state.executions.unshift(e);await saveState();closeModal();openExec(e.id)}
+function openExec(id){const e=state.executions.find(x=>x.id===id);drawer(`<div class="drawer-head"><h2>${esc(e.templateName)}</h2><button class="ghost-btn" onclick="closeDrawer()">✕</button></div><div class="muted">${e.date} · ${esc(e.environment||'')}</div>${e.steps.map((s,i)=>`<div class="sop-step ${s.completedAt?'completed':s.startedAt?'running':''}"><b>${i+1}. ${esc(s.title)}</b><div class="item-meta">Start ${fmtTime(s.startedAt)} · Done ${fmtTime(s.completedAt)} · ⏱ ${s.startedAt?msToText((s.completedAt||Date.now())-s.startedAt):'-'}</div><textarea onchange="saveExecMemo('${e.id}','${s.id}',this.value)">${esc(s.memo||'')}</textarea>${!s.startedAt?`<button class="small-btn" onclick="startExecStep('${e.id}','${s.id}')">▶ Start</button>`:!s.completedAt?`<button class="primary-btn" onclick="finishExecStep('${e.id}','${s.id}')">✅ Complete</button>`:''}</div>`).join('')}<button class="primary-btn" onclick="finishExec('${e.id}')">完成整个作业</button>`)}
+async function startExecStep(eid,sid){state.executions.find(x=>x.id===eid).steps.find(x=>x.id===sid).startedAt=Date.now();await saveState();openExec(eid)}
+async function finishExecStep(eid,sid){const s=state.executions.find(x=>x.id===eid).steps.find(x=>x.id===sid);if(!s.startedAt)s.startedAt=Date.now();s.completedAt=Date.now();await saveState();openExec(eid)}
+async function saveExecMemo(eid,sid,v){state.executions.find(x=>x.id===eid).steps.find(x=>x.id===sid).memo=v;await saveState()}
+async function finishExec(eid){state.executions.find(x=>x.id===eid).completedAt=Date.now();await saveState();closeDrawer();renderHistory()}
+function renderHistory(){$('#page-history').innerHTML=`<div class="card"><table class="history-table"><thead><tr><th>日期</th><th>SOP</th><th>环境</th><th>状态</th><th></th></tr></thead><tbody>${state.executions.map(e=>`<tr><td>${e.date}</td><td>${esc(e.templateName)}</td><td>${esc(e.environment||'-')}</td><td>${e.completedAt?'✅完成':'🟡进行中'}</td><td><button class="small-btn" onclick="openExec('${e.id}')">查看</button></td></tr>`).join('')}</tbody></table></div>`}
 
-function startSop(templateId){
-  const t=state.sopTemplates.find(x=>x.id===templateId);
-  modal(`<h2>开始作业：${esc(t.name)}</h2>
-    <div class="form-field"><label>执行日期</label><input id="execDate" type="date" value="${todayISO()}"/></div>
-    <div class="form-field" style="margin-top:10px"><label>环境 / 对象</label><input id="execEnv" placeholder="例如 SH2 / DEV / PRD"/></div>
-    <div class="form-field" style="margin-top:10px"><label>备注</label><textarea id="execNote"></textarea></div>
-    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="createExecution('${templateId}')">▶ 创建执行记录</button></div>`);
-}
-async function createExecution(templateId){
-  const t=state.sopTemplates.find(x=>x.id===templateId);
-  const e={id:uid(),templateId,templateName:t.name,date:$('#execDate').value||todayISO(),environment:$('#execEnv').value.trim(),note:$('#execNote').value.trim(),
-    createdAt:Date.now(),startedAt:Date.now(),completedAt:null,
-    steps:t.steps.map(s=>({id:uid(),templateStepId:s.id,title:s.title,note:s.note||'',startedAt:null,completedAt:null,memo:'',images:[]}))};
-  state.executions.unshift(e); await saveState(); closeModal(); renderAll(); openExecution(e.id);
-}
-function renderExecutionCompact(e){
-  const done=e.steps.filter(s=>s.completedAt).length;
-  return `<div><div class="item-title">${esc(e.templateName)}</div><div class="item-meta">${esc(e.date)} ${esc(e.environment||'')}</div>
-  <div class="progress" style="margin:12px 0"><div style="width:${e.steps.length?done/e.steps.length*100:0}%"></div></div>
-  <div class="item-meta">${done}/${e.steps.length} steps</div><button class="primary-btn" style="margin-top:12px" onclick="openExecution('${e.id}')">继续作业</button></div>`;
-}
-function openExecution(id){
-  const e=state.executions.find(x=>x.id===id); if(!e)return;
-  modal(`<h2>${esc(e.templateName)}</h2>
-    <div class="muted">${esc(e.date)} ${e.environment?' · '+esc(e.environment):''}</div>
-    ${e.note?`<pre class="codeish">${esc(e.note)}</pre>`:''}
-    <div style="margin-top:16px">${e.steps.map((s,i)=>renderExecStep(e,s,i)).join('')}</div>
-    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">关闭</button>${!e.completedAt?`<button class="primary-btn" onclick="finishExecution('${e.id}')">完成整个作业</button>`:''}</div>`);
-}
-function renderExecStep(e,s,i){
-  const cls=s.completedAt?'completed':s.startedAt?'running':'';
-  const elapsed=s.completedAt&&s.startedAt?s.completedAt-s.startedAt:s.startedAt?Date.now()-s.startedAt:null;
-  return `<div class="sop-step ${cls}">
-    <div class="step-head">
-      <div><div class="item-title">${i+1}. ${esc(s.title)}</div>${s.note?`<pre class="codeish">${esc(s.note)}</pre>`:''}
-      <div class="item-meta">Start: ${fmtTime(s.startedAt)}　Done: ${fmtTime(s.completedAt)}　⏱ <span class="timer">${msToText(elapsed)}</span></div></div>
-      <div class="step-actions">
-        ${!s.startedAt?`<button class="small-btn" onclick="startStep('${e.id}','${s.id}')">▶ Start</button>`:''}
-        ${s.startedAt&&!s.completedAt?`<button class="primary-btn" onclick="completeStep('${e.id}','${s.id}')">✅ Complete</button>`:''}
-        ${s.completedAt?`<button class="small-btn" onclick="resetStep('${e.id}','${s.id}')">↺ Reset</button>`:''}
-      </div>
-    </div>
-    <div class="form-field" style="margin-top:10px"><label>步骤 Memo</label><textarea onchange="saveStepMemo('${e.id}','${s.id}',this.value)">${esc(s.memo||'')}</textarea></div>
-  </div>`;
-}
-async function startStep(eid,sid){const s=state.executions.find(e=>e.id===eid).steps.find(x=>x.id===sid); s.startedAt=Date.now(); await saveState(); openExecution(eid); renderAll();}
-async function completeStep(eid,sid){const s=state.executions.find(e=>e.id===eid).steps.find(x=>x.id===sid); if(!s.startedAt)s.startedAt=Date.now(); s.completedAt=Date.now(); await saveState(); openExecution(eid); renderAll();}
-async function resetStep(eid,sid){const s=state.executions.find(e=>e.id===eid).steps.find(x=>x.id===sid); s.startedAt=null;s.completedAt=null; await saveState(); openExecution(eid); renderAll();}
-async function saveStepMemo(eid,sid,val){const s=state.executions.find(e=>e.id===eid).steps.find(x=>x.id===sid); s.memo=val; await saveState();}
-async function finishExecution(eid){const e=state.executions.find(x=>x.id===eid); e.completedAt=Date.now(); await saveState(); closeModal(); renderAll(); toast('执行记录已完成并保存');}
+function renderSettings(){$('#page-settings').innerHTML=`<div class="grid grid-2"><div class="card"><h2>💾 Backup</h2><button class="primary-btn" onclick="exportBackup()">导出 JSON 备份</button></div><div class="card"><h2>📥 Restore</h2><input type="file" id="importFile" accept=".json"><button class="ghost-btn" onclick="importBackup()">导入</button></div><div class="card"><h2>说明</h2><p class="muted">关闭浏览器不会自动清空 IndexedDB。换电脑、清理网站数据或公司 IT 重置浏览器时可能丢失本地数据，因此建议定期备份。</p></div></div>`}
+function exportBackup(){const b=new Blob([JSON.stringify({version:2,exportedAt:new Date().toISOString(),state},null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=`my-workboard-backup-${todayISO()}.json`;a.click();URL.revokeObjectURL(a.href)}
+async function importBackup(){const f=$('#importFile').files[0];if(!f)return;const o=JSON.parse(await f.text());if(!o.state)return;state=o.state;migrate();await saveState();renderAll();toast('恢复完成')}
 
-function renderHistory(){
-  $('#page-history').innerHTML=`<div class="card"><div class="section-title"><h2>SOP Execution History</h2></div>
-    <table class="history-table"><thead><tr><th>日期</th><th>SOP</th><th>环境</th><th>状态</th><th>总耗时</th><th></th></tr></thead><tbody>
-    ${state.executions.map(e=>{
-      const starts=e.steps.map(s=>s.startedAt).filter(Boolean), ends=e.steps.map(s=>s.completedAt).filter(Boolean);
-      const dur=starts.length&&ends.length?Math.max(...ends)-Math.min(...starts):null;
-      return `<tr><td>${esc(e.date)}</td><td>${esc(e.templateName)}</td><td>${esc(e.environment||'-')}</td><td>${e.completedAt?'✅ 完成':'🟡 进行中'}</td><td>${msToText(dur)}</td><td><button class="small-btn" onclick="openExecution('${e.id}')">查看</button> <button class="danger-btn" onclick="deleteExecution('${e.id}')">删除</button></td></tr>`;
-    }).join('')||'<tr><td colspan="6" class="empty">还没有执行记录</td></tr>'}</tbody></table></div>`;
-}
-async function deleteExecution(id){if(!confirm('删除这条执行历史？'))return;state.executions=state.executions.filter(x=>x.id!==id);await saveState();renderAll();}
-
-function renderKanban(){
-  const cols=[['todo','TODO'],['doing','DOING'],['done','DONE']];
-  $('#page-kanban').innerHTML=`<div class="section-title"><h2>Kanban</h2><button class="primary-btn" onclick="openTaskModal()">＋ 新建卡片</button></div>
-    <div class="kanban">${cols.map(([key,label])=>`<div class="kanban-col" data-status="${key}" ondragover="event.preventDefault()" ondrop="dropTask(event,'${key}')"><h3>${label}</h3>
-      ${state.kanban.filter(x=>x.status===key).map(t=>`<div class="task-card" draggable="true" ondragstart="event.dataTransfer.setData('text/plain','${t.id}')"><div class="item-title">${esc(t.title)}</div>${t.note?`<div class="item-meta">${esc(t.note)}</div>`:''}<div style="margin-top:10px"><button class="small-btn" onclick="openTaskModal('${t.id}')">编辑</button> <button class="danger-btn" onclick="deleteTask('${t.id}')">删除</button></div></div>`).join('')}
-    </div>`).join('')}</div>`;
-}
-function openTaskModal(id){
-  const t=state.kanban.find(x=>x.id===id)||{title:'',note:'',status:'todo'};
-  modal(`<h2>${id?'编辑':'新建'} Kanban 卡片</h2><div class="form-field"><label>标题</label><input id="taskTitle" value="${esc(t.title)}"/></div>
-  <div class="form-field" style="margin-top:10px"><label>Memo</label><textarea id="taskNote">${esc(t.note||'')}</textarea></div>
-  <div class="form-field" style="margin-top:10px"><label>状态</label><select id="taskStatus"><option value="todo" ${t.status==='todo'?'selected':''}>TODO</option><option value="doing" ${t.status==='doing'?'selected':''}>DOING</option><option value="done" ${t.status==='done'?'selected':''}>DONE</option></select></div>
-  <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveTask('${id||''}')">保存</button></div>`);
-}
-async function saveTask(id){const item={id:id||uid(),title:$('#taskTitle').value.trim(),note:$('#taskNote').value.trim(),status:$('#taskStatus').value};if(!item.title)return toast('请输入标题');if(id)state.kanban[state.kanban.findIndex(x=>x.id===id)]=item;else state.kanban.push(item);await saveState();closeModal();renderAll();}
-async function deleteTask(id){state.kanban=state.kanban.filter(x=>x.id!==id);await saveState();renderAll();}
-async function dropTask(ev,status){const id=ev.dataTransfer.getData('text/plain'),t=state.kanban.find(x=>x.id===id);if(t){t.status=status;await saveState();renderAll();}}
-
-let activeMemoId=null;
-function renderMemo(){
-  if(!activeMemoId && state.memos[0]) activeMemoId=state.memos[0].id;
-  const m=state.memos.find(x=>x.id===activeMemoId);
-  $('#page-memo').innerHTML=`<div class="grid grid-2" style="grid-template-columns:280px 1fr">
-    <div class="card"><div class="section-title"><h2>Memos</h2><button class="small-btn" onclick="newMemo()">＋</button></div>
-      <div class="list">${state.memos.map(x=>`<button class="item" style="text-align:left" onclick="activeMemoId='${x.id}';renderMemo()"><div class="item-title">${esc(x.title)}</div><div class="item-meta">${new Date(x.updatedAt||Date.now()).toLocaleString()}</div></button>`).join('')}</div>
-    </div>
-    <div class="card">${m?memoEditorHtml(m):'<div class="empty">新建一个 Memo</div>'}</div>
-  </div>`;
-  if(m){
-    const drop=$('#memoDrop');
-    drop?.addEventListener('dragover',e=>{e.preventDefault();});
-    drop?.addEventListener('drop',e=>{e.preventDefault();handleMemoFiles(m.id,e.dataTransfer.files);});
-    $('#memoText')?.addEventListener('paste',e=>handlePaste(e,m.id));
-  }
-}
-function memoEditorHtml(m){return `<div class="section-title"><input id="memoTitle" value="${esc(m.title)}" onchange="saveMemoField('${m.id}','title',this.value)"/><button class="danger-btn" onclick="deleteMemo('${m.id}')">删除</button></div>
-  <textarea id="memoText" placeholder="输入 Memo。可直接 Ctrl+V 粘贴截图。" onchange="saveMemoField('${m.id}','content',this.value)">${esc(m.content||'')}</textarea>
-  <div class="memo-toolbar"><button class="small-btn" onclick="addMemoCheckbox('${m.id}')">☑ 添加 Checkbox</button><button class="small-btn" onclick="addMemoLink('${m.id}')">🔗 添加链接</button></div>
-  <div class="list">${(m.checks||[]).map(c=>`<label class="checkbox-line item"><input type="checkbox" ${c.done?'checked':''} onchange="toggleMemoCheck('${m.id}','${c.id}',this.checked)"/><span>${esc(c.text)}</span></label>`).join('')}</div>
-  <div id="memoDrop" class="memo-drop">拖拽图片到这里，或在上面的 Memo 框里 Ctrl+V 粘贴截图</div>
-  <div class="memo-images">${(m.images||[]).map(im=>`<div><img src="${im.data}" onclick="window.open(this.src)"/><button class="danger-btn" style="margin-top:5px" onclick="deleteMemoImage('${m.id}','${im.id}')">删除</button></div>`).join('')}</div>`}
-async function newMemo(){const m={id:uid(),title:'New Memo',content:'',checks:[],images:[],updatedAt:Date.now()};state.memos.unshift(m);activeMemoId=m.id;await saveState();renderMemo();}
-async function saveMemoField(id,key,val){const m=state.memos.find(x=>x.id===id);m[key]=val;m.updatedAt=Date.now();await saveState();}
-async function addMemoCheckbox(id){const text=prompt('Checkbox 内容');if(!text)return;const m=state.memos.find(x=>x.id===id);m.checks.push({id:uid(),text,done:false});m.updatedAt=Date.now();await saveState();renderMemo();}
-async function toggleMemoCheck(mid,cid,done){const c=state.memos.find(x=>x.id===mid).checks.find(x=>x.id===cid);c.done=done;await saveState();}
-async function addMemoLink(id){const url=prompt('输入 URL'); if(!url)return; const m=state.memos.find(x=>x.id===id);m.content=(m.content||'')+`\n${url}`;m.updatedAt=Date.now();await saveState();renderMemo();}
-async function deleteMemo(id){if(!confirm('删除这个 Memo？'))return;state.memos=state.memos.filter(x=>x.id!==id);activeMemoId=state.memos[0]?.id||null;await saveState();renderMemo();}
-function handlePaste(e,mid){const items=[...e.clipboardData.items].filter(x=>x.type.startsWith('image/'));if(items.length){e.preventDefault();handleMemoFiles(mid,items.map(x=>x.getAsFile()));}}
-function handleMemoFiles(mid,files){[...files].filter(f=>f&&f.type.startsWith('image/')).forEach(f=>{const reader=new FileReader();reader.onload=async()=>{const m=state.memos.find(x=>x.id===mid);m.images.push({id:uid(),name:f.name||'pasted-image',data:reader.result});m.updatedAt=Date.now();await saveState();renderMemo();};reader.readAsDataURL(f);});}
-async function deleteMemoImage(mid,iid){const m=state.memos.find(x=>x.id===mid);m.images=m.images.filter(x=>x.id!==iid);await saveState();renderMemo();}
-
-function renderSettings(){
-  $('#page-settings').innerHTML=`<div class="grid grid-2">
-    <div class="card"><h2>💾 Backup</h2><p class="muted">导出包含 Routine、SOP、历史、Kanban、Memo 和图片的数据文件。</p><button class="primary-btn" onclick="exportBackup()">导出 JSON 备份</button></div>
-    <div class="card"><h2>📥 Restore</h2><p class="muted">导入之前导出的 JSON。当前数据会被覆盖。</p><input type="file" id="importFile" accept=".json"/><button class="ghost-btn" style="margin-top:10px" onclick="importBackup()">导入备份</button></div>
-    <div class="card"><h2>🗃 Storage</h2><p class="muted">数据保存在当前浏览器的 IndexedDB。关闭浏览器不会自动清空，但清理网站数据、换电脑或换浏览器配置可能导致本机数据不可见。</p></div>
-    <div class="card"><h2>⚠ Reset</h2><p class="muted">仅在确认已导出备份后使用。</p><button class="danger-btn" onclick="resetAll()">清空全部数据</button></div>
-  </div>`;
-}
-function exportBackup(){
-  const blob=new Blob([JSON.stringify({version:1,exportedAt:new Date().toISOString(),state},null,2)],{type:'application/json'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`my-workboard-backup-${todayISO()}.json`;a.click();URL.revokeObjectURL(a.href);toast('备份已导出');
-}
-async function importBackup(){
-  const f=$('#importFile').files[0];if(!f)return toast('请选择 JSON 文件');
-  try{const obj=JSON.parse(await f.text());if(!obj.state)throw new Error('invalid'); if(!confirm('导入会覆盖当前数据，继续？'))return;state=obj.state;await saveState();renderAll();toast('备份已恢复');}catch(e){toast('备份文件格式不正确');}
-}
-async function resetAll(){if(!confirm('确认清空全部数据？这个操作无法撤销。'))return;state=structuredClone(DEFAULT_DATA);await saveState();renderAll();toast('已恢复初始数据');}
-
-function goPage(name){
-  $$('.page').forEach(x=>x.classList.remove('active')); $(`#page-${name}`).classList.add('active');
-  $$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.page===name));
-  $('#pageTitle').textContent=({today:'Today',routine:'Routine',sop:'SOP',history:'Execution History',kanban:'Kanban',memo:'Memo',settings:'Settings'})[name];
-  if(name==='routine')renderRoutine(); if(name==='sop')renderSOP(); if(name==='history')renderHistory(); if(name==='kanban')renderKanban(); if(name==='memo')renderMemo(); if(name==='settings')renderSettings();
-}
-function renderAll(){
-  $('#todayText').textContent=fmtDate(todayISO());
-  renderToday();
-  const active=$('.nav-item.active')?.dataset.page||'today';
-  if(active!=='today') goPage(active);
-}
-document.addEventListener('DOMContentLoaded',async()=>{
-  await loadState(); renderAll();
-  $$('.nav-item').forEach(b=>b.addEventListener('click',()=>goPage(b.dataset.page)));
-  $('#quickBackupBtn').addEventListener('click',exportBackup);
-});
+document.addEventListener('DOMContentLoaded',async()=>{await loadState();$('#todayText').textContent=fmtDate(todayISO());$$('.nav-item').forEach(b=>b.onclick=()=>goPage(b.dataset.page));$('#quickBackupBtn').onclick=exportBackup;goPage('today')})

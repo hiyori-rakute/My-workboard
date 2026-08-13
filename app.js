@@ -1936,3 +1936,235 @@ async function saveKanbanDrawer(id){
   renderKanban();
 }
 /* ======================= END V10.2 ======================= */
+
+
+/* ======================= V10.3 TASK TREE + PLANNED START ======================= */
+
+function inlineTaskMarkup(t={}){
+  const id=t.id||uid();
+  const title=esc(t.text||t.title||'新子任务');
+  const planned=esc(t.plannedStartAt||'');
+  const due=esc(t.dueAt||'');
+  const st=t.startedAt||'';
+  const done=t.completedAt||'';
+  const checked=t.done||t.completedAt;
+  const children=t.children||[];
+  return `<div class="inline-task-wrap" data-wrapper-id="${id}">
+    <span class="inline-task"
+      data-task-id="${id}"
+      data-planned="${planned}"
+      data-started="${st||''}"
+      data-completed="${done||''}"
+      data-due="${due}"
+      contenteditable="false">
+      <button type="button" class="inline-start task-icon" title="Start" onclick="inlineTaskStart(this)">▶</button>
+      <input type="checkbox" ${checked?'checked':''} onchange="inlineTaskDone(this)">
+      <span class="inline-task-text" contenteditable="true">${title}</span>
+      <button type="button" class="inline-up task-icon" title="上移" onclick="moveInlineTask(this,-1)">↑</button>
+      <button type="button" class="inline-down task-icon" title="下移" onclick="moveInlineTask(this,1)">↓</button>
+      <button type="button" class="inline-planned task-icon" title="预计开始时间" onclick="inlineTaskPlanned(this)">📅</button>
+      <button type="button" class="inline-due task-icon" title="预计完成时间" onclick="inlineTaskDue(this)">⏰</button>
+      <button type="button" class="inline-child task-icon" title="添加下级子任务" onclick="inlineTaskChild(this)">↳＋</button>
+      <button type="button" class="inline-delete task-icon danger-icon" title="删除这个子任务" onclick="removeInlineTask(this)">✕</button>
+      <span class="inline-task-meta">${taskMetaTextV103({plannedStartAt:planned,startedAt:st?Number(st):null,dueAt:due,completedAt:done?Number(done):null})}</span>
+    </span>
+    <div class="inline-children">${children.map(inlineTaskMarkup).join('')}</div>
+  </div>`;
+}
+
+function taskMetaTextV103(t){
+  const parts=[];
+  if(t.plannedStartAt)parts.push('计划 '+String(t.plannedStartAt).replace('T',' '));
+  parts.push(t.startedAt?('Start '+fmtTime(Number(t.startedAt))):'未开始');
+  if(t.dueAt)parts.push('预计完成 '+String(t.dueAt).replace('T',' '));
+  if(t.completedAt)parts.push('Done '+fmtTime(Number(t.completedAt)));
+  return parts.join(' · ');
+}
+
+function inlineTaskPlanned(btn){
+  const el=btn.closest('.inline-task');if(!el)return;
+  const cur=(el.dataset.planned||'').replace('T',' ');
+  const v=prompt('预计开始时间（例如 2026-09-01 09:00；留空清除）',cur);
+  if(v===null)return;
+  el.dataset.planned=v.trim()?v.trim().replace(' ','T'):'';
+  refreshInlineTaskV103(el);
+}
+function refreshInlineTaskV103(el){
+  const st=el.dataset.started?Number(el.dataset.started):null;
+  const done=el.dataset.completed?Number(el.dataset.completed):null;
+  const due=el.dataset.due||'';
+  const planned=el.dataset.planned||'';
+  const meta=el.querySelector('.inline-task-meta');
+  if(meta)meta.textContent=taskMetaTextV103({plannedStartAt:planned,startedAt:st,dueAt:due,completedAt:done});
+  const cb=el.querySelector('input[type=checkbox]');if(cb)cb.checked=!!done;
+}
+function inlineTaskStart(btn){
+  const el=btn.closest('.inline-task');if(!el)return;
+  if(!el.dataset.started)el.dataset.started=String(Date.now());
+  refreshInlineTaskV103(el);
+}
+function inlineTaskDone(cb){
+  const el=cb.closest('.inline-task');if(!el)return;
+  if(cb.checked){
+    if(!el.dataset.started)el.dataset.started=String(Date.now());
+    el.dataset.completed=String(Date.now());
+  }else el.dataset.completed='';
+  refreshInlineTaskV103(el);
+}
+function inlineTaskDue(btn){
+  const el=btn.closest('.inline-task');if(!el)return;
+  const cur=(el.dataset.due||'').replace('T',' ');
+  const v=prompt('预计完成时间（例如 2026-09-05 18:00；留空清除）',cur);
+  if(v===null)return;
+  el.dataset.due=v.trim()?v.trim().replace(' ','T'):'';
+  refreshInlineTaskV103(el);
+}
+
+/* Parse one task and recurse through only its direct child container. */
+function collectInlineTaskEl(el){
+  const txt=el.querySelector(':scope > .inline-task-text') ||
+            el.querySelector(':scope > .inline-task-head > .inline-task-text');
+  const wrap=el.closest('.inline-task-wrap');
+  let childContainer=null;
+  if(wrap){
+    childContainer=[...wrap.children].find(n=>n.classList?.contains('inline-children'))||null;
+  }
+  const childEls=[];
+  if(childContainer){
+    [...childContainer.children].forEach(node=>{
+      if(node.classList?.contains('inline-task-wrap')){
+        const x=[...node.children].find(n=>n.classList?.contains('inline-task'));
+        if(x)childEls.push(x);
+      }else if(node.classList?.contains('inline-task')){
+        childEls.push(node);
+      }
+    });
+  }
+  return {
+    id:el.dataset.taskId||uid(),
+    text:(txt?.innerText||txt?.textContent||'').trim(),
+    plannedStartAt:el.dataset.planned||'',
+    dueAt:el.dataset.due||'',
+    startedAt:el.dataset.started?Number(el.dataset.started):null,
+    completedAt:el.dataset.completed?Number(el.dataset.completed):null,
+    done:!!el.dataset.completed,
+    children:childEls.map(collectInlineTaskEl).filter(x=>x.text)
+  };
+}
+
+/* Robust root detection:
+   every .inline-task is a root if it has no ancestor .inline-task-wrap inside the same editor.
+   This works whether the browser wrapped sibling tasks in div/p/br nodes. */
+function collectTaskTreeFromRootV103(root){
+  if(!root)return[];
+  const all=[...root.querySelectorAll('.inline-task')];
+  const roots=all.filter(el=>{
+    const ownWrap=el.closest('.inline-task-wrap');
+    if(!ownWrap)return !el.parentElement?.closest('.inline-task');
+    let p=ownWrap.parentElement;
+    while(p && p!==root){
+      if(p.classList?.contains('inline-task-wrap'))return false;
+      p=p.parentElement;
+    }
+    return true;
+  });
+  return roots.map(collectInlineTaskEl).filter(x=>x.text);
+}
+function collectInlineTasks(editorId){
+  return collectTaskTreeFromRootV103(document.getElementById(editorId));
+}
+function kanbanTasksForCardV103(t){
+  if(Array.isArray(t.checks) && countTasks(t.checks).all)return t.checks;
+  if(!t.html)return[];
+  const box=document.createElement('div');box.innerHTML=t.html;
+  return collectTaskTreeFromRootV103(box);
+}
+
+/* Upgrade stored old tasks with planned-start button and metadata. */
+function upgradeRichEditorTasks(root){
+  if(!root)return;
+  root.querySelectorAll('.inline-task').forEach(task=>{
+    task.setAttribute('contenteditable','false');
+    task.dataset.planned??='';
+    const add=(cls,text,title)=>{
+      if(task.querySelector(':scope > .'+cls))return;
+      const b=document.createElement('button');b.type='button';b.className=`${cls} task-icon`;b.title=title;b.textContent=text;
+      task.insertBefore(b,task.querySelector(':scope > .inline-task-meta')||null);
+    };
+    add('inline-up','↑','上移');
+    add('inline-down','↓','下移');
+    add('inline-planned','📅','预计开始时间');
+    add('inline-due','⏰','预计完成时间');
+    add('inline-child','↳＋','添加下级子任务');
+    add('inline-delete','✕','删除这个子任务');
+    refreshInlineTaskV103(task);
+  });
+}
+
+function taskQuickTree(tasks,ownerType,ownerId,depth=0){
+  return (tasks||[]).map(t=>`<div class="sub-inline nested-${Math.min(depth,5)}">
+    <input type="checkbox" ${t.done||t.completedAt?'checked':''} onchange="toggleQuickTask('${ownerType}','${ownerId}','${t.id}',this.checked)">
+    <span class="sub-name">${depth?'<span class="tree-branch">↳</span> ':''}${esc(t.text||t.title)}</span>
+    ${!t.startedAt?`<button class="micro-btn" title="Start" onclick="startQuickTask('${ownerType}','${ownerId}','${t.id}')">▶</button>`:`<span class="micro-time">${fmtTime(t.startedAt)}${t.completedAt?'→'+fmtTime(t.completedAt):''}</span>`}
+    ${t.plannedStartAt?`<span class="micro-plan">计划 ${esc(String(t.plannedStartAt).replace('T',' '))}</span>`:''}
+    ${t.dueAt?`<span class="micro-due ${dueClass(t.dueAt)}">${dueText(t.dueAt)}</span>`:''}
+  </div>${taskQuickTree(t.children||[],ownerType,ownerId,depth+1)}`).join('');
+}
+
+function cardHtml(t,c=null){
+  c=c||columnForCard(t);
+  const tasks=kanbanTasksForCardV103(t),n=countTasks(tasks);
+  const search=((t.title||'')+' '+(t.tags||[]).join(' ')).toLowerCase();
+  return `<div class="task-card ${t.completedAt?'done-card':''}" data-search="${esc(search)}" draggable="true"
+    style="background:${cardColorFor(t,c)}" ondragstart="event.dataTransfer.setData('text/plain','${t.id}')">
+    ${kanbanMiniActions(t)}
+    <div class="card-topline">
+      <input class="main-check" type="checkbox" ${t.completedAt?'checked':''} onclick="event.stopPropagation()" onchange="finishKanbanTask('${t.id}',this.checked)">
+      <div class="card-body" onclick="openKanbanCard('${t.id}')">
+        <div class="item-title">${esc(t.title)}</div><div class="tags">${tagHtml(t.tags)}</div>
+        <div class="item-meta">Start ${fmtTime(t.startedAt)} · Done ${fmtTime(t.completedAt)} · ${n.done}/${n.all} 子任务</div>
+        ${t.plannedStartAt?`<span class="micro-due">计划开始 ${esc(t.plannedStartAt.replace('T',' '))}</span>`:''}
+        ${t.dueAt?`<span class="micro-due ${dueClass(t.dueAt)}">${dueText(t.dueAt)}</span>`:''}
+      </div>
+    </div>
+    ${t.showMemo&&t.html?`<div class="rich-preview compact-preview">${t.html}</div>`:''}
+    ${n.all?`<div class="sub-list">${taskQuickTree(tasks,'kanban',t.id)}</div>`:''}
+  </div>`;
+}
+
+async function saveKanbanDrawer(id){
+  let t=id?state.kanban.find(x=>x.id===id):{id:uid(),images:[],startedAt:null,completedAt:null,showMemo:false,archived:false};
+  const tasks=collectInlineTasks('kanbanRich');
+  Object.assign(t,{
+    title:$('#kcTitle').value.trim(),status:$('#kcStatus').value,tags:splitTags($('#kcTags').value),
+    html:$('#kanbanRich').innerHTML,checks:structuredClone(tasks),
+    plannedStartAt:$('#kcPlanned').value,dueAt:$('#kcDue').value,cardColor:$('#kcColor').value
+  });
+  if(tasks.length&&tasksAllDone(tasks)&&!t.completedAt){
+    if(!t.startedAt)t.startedAt=Date.now();t.completedAt=Date.now();
+    t.status=state.kanbanColumns.find(c=>String(c.name).toUpperCase()==='DONE')?.id||'done';
+  }
+  if(!id)state.kanban.push(t);
+  const rule=state.kanbanRecurring?.find(r=>r.sourceCardId===t.id);
+  if(rule)rule.snapshot=recurringSnapshotFromCard(t);
+  await saveState();closeDrawer();renderKanban();
+}
+
+/* Project uses the exact same rich task data, so plannedStartAt is automatically saved too. */
+async function saveProjectDrawerV9(id){
+  const p=state.projects.find(x=>x.id===id);
+  const tasks=collectInlineTasks('projectRich').map(x=>({...x,title:x.text,note:''}));
+  Object.assign(p,{
+    title:$('#pdTitle').value.trim(),categoryId:$('#pdCat').value,
+    plannedStartAt:$('#pdPlanned').value,dueAt:$('#pdDue').value,
+    status:$('#pdStatus').value,tags:splitTags($('#pdTags').value),
+    html:$('#projectRich').innerHTML,subtasks:tasks,
+    handoffs:collectRichNotes('handoffs'),reports:collectRichNotes('reports'),
+    questions:collectRichNotes('questions'),investigations:collectRichNotes('investigations')
+  });
+  if(p.subtasks.length&&p.subtasks.every(x=>x.done||x.completedAt)&&!p.completedAt){
+    if(!p.startedAt)p.startedAt=Date.now();p.completedAt=Date.now();p.status='done';
+  }
+  await saveState();closeDrawer();renderProjects();toast('项目已保存');
+}
+/* ======================= END V10.3 ======================= */

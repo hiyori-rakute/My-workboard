@@ -247,3 +247,26 @@ input,select,textarea{width:100%;border:1px solid var(--line);border-radius:11px
 .task-card .nested-1{padding-left:16px!important}
 .task-card .nested-2{padding-left:32px!important}
 .task-card .nested-3{padding-left:48px!important}
+
+/* V10.3 */
+.routine-task-icon.pending,.legend-routine-example.pending{
+  color:#ff72a8!important;
+}
+.routine-task-icon.complete,.legend-routine-example.complete{
+  color:#cfd3da!important;
+  filter:none!important;
+}
+.task-card .sub-inline{
+  grid-template-columns:18px minmax(0,1fr) auto auto auto!important;
+}
+.micro-plan{
+  font-size:9px;
+  color:#7b68a6;
+  background:#f1edfa;
+  border-radius:999px;
+  padding:2px 5px;
+  white-space:nowrap;
+}
+.inline-task{
+  grid-template-columns:auto auto minmax(90px,1fr) auto auto auto auto auto auto!important;
+}

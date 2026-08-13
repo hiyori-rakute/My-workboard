@@ -713,7 +713,6 @@ function renderKanban(){
   ensureRecurringKanban();
   const cols=state.kanbanColumns, archivedCount=state.kanban.filter(x=>x.archived).length;
   $('#page-kanban').innerHTML=`<div class="section-title"><h2>Kanban</h2><div>
-    <button class="ghost-btn" onclick="createFromKanbanTemplate()">📋 从模板添加</button>
     <button class="ghost-btn" onclick="goPage('templates')">🧩 模板库</button>
     <button class="ghost-btn" onclick="openArchive()">📦 归档 ${archivedCount?`(${archivedCount})`:''}</button>
     <button class="ghost-btn" onclick="addKanbanColumn()">＋ 新列</button>
@@ -859,29 +858,18 @@ async function useMemoTemplate(id){
 }
 
 /* ---------- refresh kanban template snapshots to preserve hierarchy ---------- */
-function resetTaskTimesKeepIds(tasks=[]){
-  return tasks.map(t=>({id:t.id||uid(),text:t.text||t.title||'',dueAt:t.dueAt||'',startedAt:null,completedAt:null,done:false,children:resetTaskTimesKeepIds(t.children||[])}));
-}
-function freshTemplateTasksAndHtml(html,tasks=[]){
-  const idMap=new Map();
-  function clone(list=[]){return list.map(t=>{const oldId=t.id||uid(),newId=uid();idMap.set(oldId,newId);return{id:newId,text:t.text||t.title||'',dueAt:t.dueAt||'',startedAt:null,completedAt:null,done:false,children:clone(t.children||[])};})}
-  const fresh=clone(tasks);
-  const box=document.createElement('div');box.innerHTML=html||'';
-  box.querySelectorAll('[data-task-id]').forEach(el=>{const n=idMap.get(el.dataset.taskId);if(n)el.dataset.taskId=n;el.dataset.started='';el.dataset.completed='';const cb=el.querySelector(':scope > .inline-task-head > input[type=checkbox]');if(cb)cb.checked=false;});
-  return {checks:fresh,html:box.innerHTML};
-}
 async function saveKanbanTemplate(id){
   const t=state.kanban.find(x=>x.id===id);if(!t)return;const name=prompt('模板名称',t.title);if(!name)return;
   state.kanbanTemplates.push({
     id:uid(),name,title:t.title,html:t.html,tags:[...(t.tags||[])],
-    checks:resetTaskTimesKeepIds(t.checks||[]),plannedStartAt:'',dueAt:'',createdAt:Date.now()
+    checks:clearTaskTimes(t.checks||[]),plannedStartAt:'',dueAt:'',createdAt:Date.now()
   });
   await saveState();toast('已保存为模板');
 }
 async function applyKanbanTemplate(id){
   const x=state.kanbanTemplates.find(t=>t.id===id);if(!x)return;
-  const fresh=freshTemplateTasksAndHtml(x.html,x.checks||[]);
-  const t={id:uid(),title:x.title,status:state.kanbanColumns[0]?.id||'todo',html:fresh.html,tags:[...(x.tags||[])],checks:fresh.checks,images:[],startedAt:null,completedAt:null,plannedStartAt:'',dueAt:'',showMemo:false,archived:false,createdAt:Date.now()};
+  const checks=clearTaskTimes(x.checks||[]);
+  const t={id:uid(),title:x.title,status:state.kanbanColumns[0]?.id||'todo',html:x.html,tags:[...(x.tags||[])],checks,images:[],startedAt:null,completedAt:null,plannedStartAt:'',dueAt:'',showMemo:false,archived:false,createdAt:Date.now()};
   t.html=mergeTasksIntoHtml(t.html,t.checks);state.kanban.push(t);await saveState();closeModal();goPage('kanban');setTimeout(()=>openKanbanCard(t.id),0);
 }
 
@@ -2929,3 +2917,294 @@ function wireImageDrop(zoneId,editorId,callback){
   };
 }
 /* ======================= END V10.8 ======================= */
+
+
+/* ======================= V10.11 STABLE RECURRENCE ======================= */
+/* Built on V10.8 stable UI. Only recurrence-related functions are overridden. */
+
+function recDatePartsV1011(ds){
+  const [y,m,d]=String(ds).slice(0,10).split('-').map(Number);
+  const dt=new Date(y,m-1,d);
+  return {y,m,d,wd:dt.getDay(),dt};
+}
+function recISOFromDateV1011(dt){
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+}
+function recLastDayV1011(y,m){return new Date(y,m,0).getDate()}
+function recMonthsDiffV1011(a,b){return (b.getFullYear()-a.getFullYear())*12+(b.getMonth()-a.getMonth())}
+
+function legacyRoutineConditionV1011(r){
+  if(r.repeat==='daily')return {type:'daily'};
+  if(r.repeat==='weekdays')return {type:'weekly',weekdays:[1,2,3,4,5]};
+  return {type:'weekly',weekdays:(r.weekdays||[]).map(Number)};
+}
+function legacyKanbanConditionV1011(r){
+  if(r.frequency==='daily')return {type:'daily'};
+  if(r.frequency==='weekly')return {type:'weekly',weekdays:[Number(r.weekday??1)]};
+  if(r.frequency==='yearly')return {type:'yearly',months:[Number(r.monthOfYear||1)],day:Number(r.dayOfMonth||1)};
+  return {type:'monthly',day:Number(r.dayOfMonth||1)};
+}
+function condMatchV1011(c,ds){
+  const p=recDatePartsV1011(ds), type=c?.type||'weekly';
+  if(type==='daily')return true;
+  if(type==='weekly')return (c.weekdays||[]).map(Number).includes(p.wd);
+  if(type==='monthend')return p.d===recLastDayV1011(p.y,p.m);
+  if(type==='monthly'){
+    if(c.monthEnd)return p.d===recLastDayV1011(p.y,p.m);
+    return p.d===Math.min(Number(c.day||1),recLastDayV1011(p.y,p.m));
+  }
+  if(type==='quarterly'){
+    const ap=recDatePartsV1011(c.anchorDate||todayISO());
+    const diff=recMonthsDiffV1011(ap.dt,p.dt);
+    if(diff<0||diff%3!==0)return false;
+    if(c.monthEnd)return p.d===recLastDayV1011(p.y,p.m);
+    return p.d===Math.min(Number(c.day||ap.d||1),recLastDayV1011(p.y,p.m));
+  }
+  if(type==='yearly'){
+    const months=(c.months||[]).map(Number);
+    if(!months.includes(p.m))return false;
+    if(c.monthEnd)return p.d===recLastDayV1011(p.y,p.m);
+    return p.d===Math.min(Number(c.day||1),recLastDayV1011(p.y,p.m));
+  }
+  return false;
+}
+function conditionsMatchV1011(conds,logic,ds){
+  const list=(conds||[]).filter(Boolean);
+  if(!list.length)return false;
+  return String(logic||'OR').toUpperCase()==='AND'
+    ? list.every(c=>condMatchV1011(c,ds))
+    : list.some(c=>condMatchV1011(c,ds));
+}
+function condSummaryV1011(c){
+  const wn=['日','一','二','三','四','五','六'];
+  if(c.type==='daily')return '每天';
+  if(c.type==='weekly')return '每周'+(c.weekdays||[]).map(x=>'周'+wn[Number(x)]).join('、');
+  if(c.type==='monthend')return '每月最后一天';
+  if(c.type==='monthly')return c.monthEnd?'每月最后一天':`每月${c.day||1}日`;
+  if(c.type==='quarterly')return `每3个月${c.monthEnd?'月末':(c.day||1)+'日'}`;
+  if(c.type==='yearly')return `每年${(c.months||[]).join('、')}月${c.monthEnd?'月末':(c.day||1)+'日'}`;
+  return '';
+}
+
+function recConditionRowV1011(c={}){
+  const type=c.type||'weekly', w=(c.weekdays||[5]).map(Number), months=(c.months||[4,8]).map(Number);
+  return `<div class="rec-rule-v1011">
+    <div class="rec-rule-head-v1011">
+      <select class="recType" onchange="refreshRecRowV1011(this)">
+        <option value="daily" ${type==='daily'?'selected':''}>每天</option>
+        <option value="weekly" ${type==='weekly'?'selected':''}>每周指定星期</option>
+        <option value="monthly" ${type==='monthly'?'selected':''}>每月指定日期</option>
+        <option value="monthend" ${type==='monthend'?'selected':''}>每月最后一天</option>
+        <option value="quarterly" ${type==='quarterly'?'selected':''}>每3个月</option>
+        <option value="yearly" ${type==='yearly'?'selected':''}>每年指定月份</option>
+      </select>
+      <button type="button" class="rec-remove-v1011" onclick="this.closest('.rec-rule-v1011').remove()">✕</button>
+    </div>
+    <div class="recWeekly rec-detail-v1011" style="${type==='weekly'?'':'display:none'}">
+      <div class="rec-weekdays-v1011">
+        ${['日','一','二','三','四','五','六'].map((n,i)=>`<label><input type="checkbox" class="recWeek" value="${i}" ${w.includes(i)?'checked':''}>周${n}</label>`).join('')}
+      </div>
+    </div>
+    <div class="recDay rec-detail-v1011" style="${['monthly','quarterly','yearly'].includes(type)?'':'display:none'}">
+      <label>执行日 <input type="number" class="recDayInput" min="1" max="31" value="${Number(c.day||1)}"></label>
+      <label><input type="checkbox" class="recMonthEnd" ${c.monthEnd?'checked':''}> 使用该月最后一天</label>
+    </div>
+    <div class="recQuarter rec-detail-v1011" style="${type==='quarterly'?'':'display:none'}">
+      <label>起算日期 <input type="date" class="recAnchor" value="${esc(c.anchorDate||todayISO())}"></label>
+    </div>
+    <div class="recYear rec-detail-v1011" style="${type==='yearly'?'':'display:none'}">
+      <div class="rec-months-v1011">
+        ${Array.from({length:12},(_,i)=>i+1).map(m=>`<label><input type="checkbox" class="recMonth" value="${m}" ${months.includes(m)?'checked':''}>${m}月</label>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+function refreshRecRowV1011(sel){
+  const row=sel.closest('.rec-rule-v1011'),t=sel.value;
+  row.querySelectorAll('.rec-detail-v1011').forEach(x=>x.style.display='none');
+  if(t==='weekly')row.querySelector('.recWeekly').style.display='';
+  if(['monthly','quarterly','yearly'].includes(t))row.querySelector('.recDay').style.display='';
+  if(t==='quarterly')row.querySelector('.recQuarter').style.display='';
+  if(t==='yearly')row.querySelector('.recYear').style.display='';
+}
+function addRecRuleV1011(boxId){
+  const box=document.getElementById(boxId);if(box)box.insertAdjacentHTML('beforeend',recConditionRowV1011({type:'weekly',weekdays:[5]}));
+}
+function collectRecRulesV1011(boxId){
+  const box=document.getElementById(boxId);if(!box)return[];
+  return [...box.querySelectorAll('.rec-rule-v1011')].map(row=>{
+    const type=row.querySelector('.recType').value,c={type};
+    if(type==='weekly')c.weekdays=[...row.querySelectorAll('.recWeek:checked')].map(x=>Number(x.value));
+    if(['monthly','quarterly','yearly'].includes(type)){
+      c.day=Number(row.querySelector('.recDayInput')?.value||1);
+      c.monthEnd=!!row.querySelector('.recMonthEnd')?.checked;
+    }
+    if(type==='quarterly')c.anchorDate=row.querySelector('.recAnchor')?.value||todayISO();
+    if(type==='yearly')c.months=[...row.querySelectorAll('.recMonth:checked')].map(x=>Number(x.value));
+    return c;
+  }).filter(c=>c.type!=='weekly'||c.weekdays.length).filter(c=>c.type!=='yearly'||c.months.length);
+}
+
+/* ----- Routine ----- */
+function isRoutineDue(r,dateStr){
+  const conditions=r.recConditionsV1011?.length?r.recConditionsV1011:[legacyRoutineConditionV1011(r)];
+  return conditionsMatchV1011(conditions,r.recLogicV1011||'OR',dateStr);
+}
+function repeatText(r){
+  const conditions=r.recConditionsV1011?.length?r.recConditionsV1011:[legacyRoutineConditionV1011(r)];
+  return conditions.map(condSummaryV1011).join((r.recLogicV1011||'OR')==='AND'?' AND ':' OR ');
+}
+function openRoutineModal(id){
+  const r=state.routines.find(x=>x.id===id)||{name:'',repeat:'weekdays',weekdays:[1,2,3,4,5],subtasks:[],tags:[],icon:'●'};
+  const conditions=r.recConditionsV1011?.length?r.recConditionsV1011:[legacyRoutineConditionV1011(r)];
+  modal(`<h2>${id?'编辑':'新建'} Routine</h2>
+    <div class="form-row"><div class="form-field"><label>名称</label><input id="rName" value="${esc(r.name)}"></div><div class="form-field"><label>图标</label><input id="rIcon" value="${esc(r.icon||'●')}" maxlength="4"></div></div>
+    <div class="form-field"><label>标签</label><input id="rTags" value="${esc((r.tags||[]).join(', '))}"></div>
+    <div class="form-field"><label>多个条件之间</label><select id="rRecLogic">
+      <option value="OR" ${(r.recLogicV1011||'OR')==='OR'?'selected':''}>OR / 或：任意条件满足即可</option>
+      <option value="AND" ${r.recLogicV1011==='AND'?'selected':''}>AND / 且：所有条件同时满足</option>
+    </select><div class="item-meta">例：每周五 OR 每月最后一天</div></div>
+    <div id="rRecRules">${conditions.map(recConditionRowV1011).join('')}</div>
+    <button class="small-btn" type="button" onclick="addRecRuleV1011('rRecRules')">＋ 添加重复条件</button>
+    <h3>子任务</h3><div id="rSubs">${(r.subtasks||[]).map(routineSubEditRow).join('')}</div>
+    <button class="small-btn" onclick="$('#rSubs').insertAdjacentHTML('beforeend',routineSubEditRow({id:uid(),title:''}))">＋子任务</button>
+    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRoutineV1011('${id||''}')">保存</button></div>`);
+}
+async function saveRoutineV1011(id){
+  const rules=collectRecRulesV1011('rRecRules');
+  if(!rules.length){toast('请至少设置一个有效的重复条件');return}
+  const old=id?state.routines.find(x=>x.id===id):null;
+  const x={...(old||{}),id:id||uid(),name:$('#rName').value.trim(),icon:$('#rIcon').value.trim()||'●',tags:splitTags($('#rTags').value),
+    recLogicV1011:$('#rRecLogic').value,recConditionsV1011:rules,
+    subtasks:$$('.rsub').map(e=>({id:e.dataset.id,title:e.querySelector('.rsub-title').value.trim()})).filter(x=>x.title)};
+  if(id)state.routines[state.routines.findIndex(v=>v.id===id)]=x;else state.routines.push(x);
+  await saveState();closeModal();renderAll();
+}
+
+/* ----- Kanban recurring ----- */
+function recurrenceDue(rule,d=new Date()){
+  const ds=recISOFromDateV1011(d);
+  const conditions=rule.recConditionsV1011?.length?rule.recConditionsV1011:[legacyKanbanConditionV1011(rule)];
+  return conditionsMatchV1011(conditions,rule.recLogicV1011||'OR',ds);
+}
+function recurrenceKey(rule,d=new Date()){
+  /* one generation per actual matched calendar day; this is required when one rule has Tue + Fri */
+  return recISOFromDateV1011(d);
+}
+function openRepeatModal(id){
+  const t=state.kanban.find(x=>x.id===id);if(!t)return;
+  const r=(state.kanbanRecurring||[]).find(x=>x.sourceCardId===id)||{targetColumnId:t.status,enabled:true};
+  const conditions=r.recConditionsV1011?.length?r.recConditionsV1011:[legacyKanbanConditionV1011(r)];
+  modal(`<h2>🔁 定期重复</h2>
+    <div class="form-field"><label>多个条件之间</label><select id="repLogicV1011">
+      <option value="OR" ${(r.recLogicV1011||'OR')==='OR'?'selected':''}>OR / 或：任意条件满足即可</option>
+      <option value="AND" ${r.recLogicV1011==='AND'?'selected':''}>AND / 且：所有条件同时满足</option>
+    </select><div class="item-meta">每周二和周五：只需在同一个“每周指定星期”条件里同时勾周二、周五。</div></div>
+    <div id="repRulesV1011">${conditions.map(recConditionRowV1011).join('')}</div>
+    <button class="small-btn" type="button" onclick="addRecRuleV1011('repRulesV1011')">＋ 添加重复条件</button>
+    <div class="form-field" style="margin-top:12px"><label>自动生成到哪一列</label><select id="repCol">${state.kanbanColumns.map(c=>`<option value="${c.id}" ${r.targetColumnId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div>
+    <label class="checkbox-line"><input id="repEnabled" type="checkbox" ${r.enabled!==false?'checked':''}>启用</label>
+    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRepeatRuleV1011('${id}')">保存</button></div>`);
+}
+async function saveRepeatRuleV1011(id){
+  const t=state.kanban.find(x=>x.id===id);if(!t)return;
+  const rules=collectRecRulesV1011('repRulesV1011');
+  if(!rules.length){toast('请至少设置一个有效的重复条件');return}
+  state.kanbanRecurring??=[];
+  let r=state.kanbanRecurring.find(x=>x.sourceCardId===id);
+  if(!r){r={id:uid(),sourceCardId:id};state.kanbanRecurring.push(r)}
+  Object.assign(r,{name:t.title,recLogicV1011:$('#repLogicV1011').value,recConditionsV1011:rules,targetColumnId:$('#repCol').value,enabled:$('#repEnabled').checked,snapshot:recurringSnapshotFromCard(t)});
+  ensureRecurringKanban();await saveState();closeModal();renderKanban();toast('定期重复已保存');
+}
+
+/* preserve new routine recurrence in templates without breaking old templates */
+function cloneRoutineSnapshot(r){
+  return {name:r.name,icon:r.icon||'●',tags:[...(r.tags||[])],repeat:r.repeat,weekdays:[...(r.weekdays||[])],
+    recLogicV1011:r.recLogicV1011||'OR',recConditionsV1011:structuredClone(r.recConditionsV1011||[]),
+    subtasks:(r.subtasks||[]).map(s=>({id:uid(),title:s.title}))};
+}
+/* ======================= END V10.11 ======================= */
+
+
+/* ======================= V10.12 TEMPLATE HOTFIX ======================= */
+/* Fix 1: restore direct "从模板" button on Kanban page.
+   Fix 2: avoid duplicated inline tasks when saving/editing Kanban templates. */
+
+function stripInlineTasksFromHtmlV1012(html){
+  const box=document.createElement('div');
+  box.innerHTML=html||'';
+  box.querySelectorAll('.inline-task').forEach(el=>el.remove());
+  /* remove wrappers that became truly empty after task removal */
+  [...box.querySelectorAll('div,p')].reverse().forEach(el=>{
+    if(!el.textContent.trim() && !el.querySelector('img,br,a')) el.remove();
+  });
+  return box.innerHTML;
+}
+
+/* Normalize both newly saved and already-existing templates. */
+async function saveKanbanTemplate(id){
+  const t=state.kanban.find(x=>x.id===id);if(!t)return;
+  const name=prompt('模板名称',t.title);if(!name)return;
+  const checks=clearTaskTimes(t.checks||[]);
+  state.kanbanTemplates.push({
+    id:uid(),name,title:t.title,
+    html:stripInlineTasksFromHtmlV1012(t.html||''),
+    tags:[...(t.tags||[])],checks,
+    plannedStartAt:'',dueAt:'',createdAt:Date.now()
+  });
+  await saveState();toast('已保存为模板');
+}
+
+function editKanbanTemplate(id){
+  const t=state.kanbanTemplates.find(x=>x.id===id);if(!t)return;
+  /* Old templates can already contain task HTML + task data with different IDs.
+     Strip task HTML first, then render exactly one canonical task tree. */
+  const cleanHtml=stripInlineTasksFromHtmlV1012(t.html||'');
+  modal(`<h2>编辑 Kanban 模板</h2>
+    <div class="form-row"><input id="ktName" value="${esc(t.name)}" placeholder="模板名称"><input id="ktTitle" value="${esc(t.title||'')}" placeholder="卡片标题"></div>
+    <input id="ktTags" value="${esc((t.tags||[]).join(', '))}" placeholder="标签">
+    ${richEditor('ktRich',mergeTasksIntoHtml(cleanHtml,t.checks||[]),'模板 Memo / 子任务…')}
+    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveKanbanTemplateEdit('${id}')">保存</button></div>`);
+  setTimeout(()=>{ try{hydrateAllRichEditors()}catch(e){} },0);
+}
+
+async function saveKanbanTemplateEdit(id){
+  const t=state.kanbanTemplates.find(x=>x.id===id);if(!t)return;
+  t.name=$('#ktName').value.trim();
+  t.title=$('#ktTitle').value.trim();
+  t.tags=splitTags($('#ktTags').value);
+  t.checks=clearTaskTimes(collectInlineTasks('ktRich'));
+  t.html=stripInlineTasksFromHtmlV1012($('#ktRich').innerHTML);
+  await saveState();closeModal();renderTemplates();
+}
+
+async function applyKanbanTemplate(id){
+  const x=state.kanbanTemplates.find(t=>t.id===id);if(!x)return;
+  const checks=clearTaskTimes(x.checks||[]);
+  const t={id:uid(),title:x.title,status:state.kanbanColumns[0]?.id||'todo',
+    html:stripInlineTasksFromHtmlV1012(x.html||''),tags:[...(x.tags||[])],checks,images:[],
+    startedAt:null,completedAt:null,plannedStartAt:'',dueAt:'',showMemo:false,archived:false,createdAt:Date.now()};
+  t.html=mergeTasksIntoHtml(t.html,t.checks);
+  state.kanban.push(t);await saveState();closeModal();goPage('kanban');setTimeout(()=>openKanbanCard(t.id),0);
+}
+
+/* Last-definition-wins override, based on V10.11's stable renderer. */
+function renderKanban(){
+  ensureRecurringKanban();
+  const cols=state.kanbanColumns, archivedCount=state.kanban.filter(x=>x.archived).length;
+  $('#page-kanban').innerHTML=`<div class="section-title"><h2>Kanban</h2><div>
+    <button class="ghost-btn" onclick="createFromKanbanTemplate()">📋 从模板</button>
+    <button class="ghost-btn" onclick="goPage('templates')">🧩 模板库</button>
+    <button class="ghost-btn" onclick="openArchive()">📦 归档 ${archivedCount?`(${archivedCount})`:''}</button>
+    <button class="ghost-btn" onclick="addKanbanColumn()">＋ 新列</button>
+    <button class="primary-btn" onclick="openKanbanCard()">＋ 新建卡片</button>
+  </div></div>
+  <div class="filterbar"><input id="kanbanFilterInput" placeholder="按标题 / 标签筛选" value="${esc(kanbanFilter)}" oninput="filterKanbanVisible(this.value)"></div>
+  <div class="kanban">${cols.map(c=>`<div class="kanban-col" style="background:${esc(c.bgColor||'#eef1f6')}" ondragover="event.preventDefault()" ondrop="dropTask(event,'${c.id}')">
+    <div class="kanban-col-head"><h3>${esc(c.name)}</h3><span><button class="icon-btn" title="左移" onclick="moveKanbanColumn('${c.id}',-1)">←</button><button class="icon-btn" title="右移" onclick="moveKanbanColumn('${c.id}',1)">→</button><button class="icon-btn" title="列设置 / 颜色" onclick="renameKanbanColumn('${c.id}')">⋯</button></span></div>
+    ${state.kanban.filter(x=>x.status===c.id&&!x.archived).map(t=>cardHtml(t,c)).join('')}
+  </div>`).join('')}</div>
+  <div class="card" style="margin-top:18px"><div class="section-title"><h2>📅 Kanban 日历 / 历史</h2><span class="muted">未完成在上，完成在下；格内可上下滚动</span></div>${calendarModule(kanbanCalMonth,kanbanCalendarItems(),'kanbanCalendarShift')}</div>`;
+  setTimeout(()=>filterKanbanVisible(kanbanFilter),0);
+}
+/* ======================= END V10.12 TEMPLATE HOTFIX ======================= */

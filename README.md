@@ -1,15 +1,11 @@
-# My Workboard V10.8
+# My Workboard V10.12
 
-本版只针对图片重复插入做根修复：
+基于 V10.11 稳定版修复：
 
-- 找到 V10.7 仍然重复的真实原因：
-  app.js 中 V10.6 的 document paste listener 仍然存在，并且比 V10.7 listener 更早执行。
-- V10.8 直接从代码中删除 V10.6 旧 listener，不再靠后续 listener 阻止它。
-- 同时禁用最早期 wireImageDrop() 的 ed.onpaste 绑定。
-- 最终只保留一条图片粘贴路径。
-- Kanban / Memo / Project / SOP / Templates 均共用同一套。
-- Ctrl+V 一张截图应只插入一张。
-- Memo 不会重新 render，也不会清空未保存内容。
-- 拖拽图片也统一走单一插入逻辑。
+- 恢复 Kanban 页面顶部“📋 从模板”按钮，同时保留“🧩 模板库”。
+- 修复 Kanban 保存为模板后，编辑模板时子任务被重复显示一套的问题。
+- 兼容已经出现重复风险的旧模板：编辑时先清理 HTML 中旧任务节点，再按模板 checks 只渲染一套任务。
+- 从模板创建卡片时同样先规范化，避免重复。
+- 保留 V10.11 的 Routine / Kanban 多条件重复规则。
 
-缓存版本：10.8.0
+缓存版本：10.12.0

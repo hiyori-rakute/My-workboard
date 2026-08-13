@@ -52,3 +52,17 @@ input,select,textarea{width:100%;border:1px solid var(--line);border-radius:11px
 
 /* V3 */
 .task-card{position:relative}.task-card .card-topline{display:flex;align-items:flex-start;gap:9px}.task-card .main-check{width:18px;height:18px;margin-top:2px}.task-card .card-body{flex:1;min-width:0}.task-card .card-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}.task-card .rich-preview{margin-top:9px;padding:9px;background:#f8f9fc;border:1px solid var(--line);border-radius:10px;font-size:13px;max-height:160px;overflow:auto}.task-card .sub-list{margin-top:8px;display:flex;flex-direction:column;gap:6px}.task-card .sub-inline{display:grid;grid-template-columns:18px 1fr auto auto;gap:7px;align-items:center;font-size:12px}.task-card .sub-inline input[type=checkbox]{width:16px}.time-badge{font-size:11px;color:var(--muted)}.due-late{color:var(--bad);font-weight:700}.due-soon{color:var(--warn);font-weight:700}.inline-check{display:inline-flex;align-items:center;gap:6px;padding:2px 4px;border-radius:6px;background:#f6f7fb;margin:0 2px}.inline-check input{width:auto}.rich-editor img{max-width:100%;height:auto;border-radius:10px;border:1px solid var(--line);margin:6px 0;cursor:pointer}.rich-editor a{color:var(--accent);text-decoration:underline}.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.panel-note{border:1px solid var(--line);border-radius:14px;padding:12px;margin:10px 0}.panel-note .note-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}.project-sub-inline{display:grid;grid-template-columns:18px 1fr auto auto;gap:8px;align-items:center}@media(max-width:900px){.detail-grid{grid-template-columns:1fr}.task-card .sub-inline{grid-template-columns:18px 1fr}}
+
+/* V4 integrated inline task widgets */
+.inline-task{
+  display:inline-grid;grid-template-columns:auto auto minmax(90px,1fr) auto;
+  gap:6px;align-items:center;padding:5px 7px;margin:3px 2px;
+  border:1px solid var(--line);border-radius:9px;background:#f8f9fc;vertical-align:middle;
+}
+.inline-task .inline-start,.inline-task .inline-due{border:1px solid var(--line);background:#fff;border-radius:7px;padding:3px 6px;font-size:11px}
+.inline-task input[type=checkbox]{width:16px;height:16px}
+.inline-task-text{min-width:70px;outline:none}
+.inline-task-meta{grid-column:1/-1;font-size:10px;color:var(--muted)}
+.rich-editor mark,.rich-preview mark{background:#fff59d;padding:0 2px}
+.project-row .sub-list{margin-top:8px;display:flex;flex-direction:column;gap:6px}
+.project-row .sub-inline{display:grid;grid-template-columns:18px 1fr auto auto;gap:7px;align-items:center;font-size:12px}

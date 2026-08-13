@@ -1,3 +1,4 @@
+// My Workboard V4 - integrated inline tasks
 
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const uid=()=>crypto.randomUUID?crypto.randomUUID():Date.now().toString(36)+Math.random().toString(36).slice(2);
@@ -81,7 +82,69 @@ function richCmd(id,cmd){document.getElementById(id)?.focus();document.execComma
 function richColor(id,c){document.getElementById(id)?.focus();document.execCommand('foreColor',false,c)}
 function richHighlight(id){document.getElementById(id)?.focus();try{document.execCommand('hiliteColor',false,'#fff59d')}catch(e){document.execCommand('backColor',false,'#fff59d')}}
 function richLink(id){const u=prompt('输入链接 URL');if(!u)return;document.getElementById(id)?.focus();document.execCommand('createLink',false,u)}
-function insertInlineCheckbox(id){const ed=document.getElementById(id);ed?.focus();document.execCommand('insertHTML',false,`<span class="inline-check" contenteditable="false"><input type="checkbox"> <span contenteditable="true">新子任务</span></span>&nbsp;`)}
+function inlineTaskMarkup(t={}){
+ const id=t.id||uid(), title=esc(t.text||t.title||'新子任务'), due=esc(t.dueAt||''), st=t.startedAt||'', done=t.completedAt||'', checked=t.done||t.completedAt;
+ return `<span class="inline-task" data-task-id="${id}" data-started="${st||''}" data-completed="${done||''}" data-due="${due}" contenteditable="false">
+   <button type="button" class="inline-start" onclick="inlineTaskStart(this)">▶ Start</button>
+   <input type="checkbox" ${checked?'checked':''} onchange="inlineTaskDone(this)">
+   <span class="inline-task-text" contenteditable="true">${title}</span>
+   <button type="button" class="inline-due" onclick="inlineTaskDue(this)">⏰</button>
+   <span class="inline-task-meta">${st?fmtTime(Number(st)):'未开始'}${due?' · 预计 '+due.replace('T',' '):''}${done?' · 完成 '+fmtTime(Number(done)):''}</span>
+ </span>`;
+}
+function insertInlineCheckbox(id){
+ const ed=document.getElementById(id); if(!ed)return;
+ const title=prompt('子任务名称','新子任务'); if(title===null)return;
+ ed.focus(); document.execCommand('insertHTML',false,inlineTaskMarkup({id:uid(),text:title})+'&nbsp;');
+}
+function inlineTaskStart(btn){
+ const el=btn.closest('.inline-task'); if(!el)return;
+ if(!el.dataset.started) el.dataset.started=String(Date.now());
+ refreshInlineTask(el);
+}
+function inlineTaskDone(cb){
+ const el=cb.closest('.inline-task'); if(!el)return;
+ if(cb.checked){
+   if(!el.dataset.started) el.dataset.started=String(Date.now());
+   el.dataset.completed=String(Date.now());
+ }else{
+   el.dataset.completed='';
+ }
+ refreshInlineTask(el);
+}
+function inlineTaskDue(btn){
+ const el=btn.closest('.inline-task'); if(!el)return;
+ const cur=(el.dataset.due||'').replace('T',' ');
+ const v=prompt('预计完成时间（例如 2026-08-14 15:30，留空则清除）',cur);
+ if(v===null)return;
+ el.dataset.due=v.trim()?v.trim().replace(' ','T'):'';
+ refreshInlineTask(el);
+}
+function refreshInlineTask(el){
+ const st=el.dataset.started?Number(el.dataset.started):null, done=el.dataset.completed?Number(el.dataset.completed):null, due=el.dataset.due||'';
+ const meta=el.querySelector('.inline-task-meta');
+ if(meta) meta.textContent=`${st?fmtTime(st):'未开始'}${due?' · 预计 '+due.replace('T',' '):''}${done?' · 完成 '+fmtTime(done):''}`;
+ const cb=el.querySelector('input[type=checkbox]'); if(cb)cb.checked=!!done;
+}
+function collectInlineTasks(editorId){
+ const ed=document.getElementById(editorId); if(!ed)return[];
+ return [...ed.querySelectorAll('.inline-task')].map(el=>({
+   id:el.dataset.taskId||uid(),
+   text:(el.querySelector('.inline-task-text')?.innerText||'').trim(),
+   dueAt:el.dataset.due||'',
+   startedAt:el.dataset.started?Number(el.dataset.started):null,
+   completedAt:el.dataset.completed?Number(el.dataset.completed):null,
+   done:!!el.dataset.completed
+ })).filter(x=>x.text);
+}
+function mergeTasksIntoHtml(html,tasks=[]){
+ let result=html||'';
+ for(const t of tasks){
+   if(result.includes(`data-task-id="${t.id}"`))continue;
+   result += `<div>${inlineTaskMarkup(t)}</div>`;
+ }
+ return result;
+}
 function pickInlineImage(id){document.getElementById(id+'File')?.click()}
 function insertSelectedImage(id,input){const f=input.files?.[0];if(!f)return;const r=new FileReader();r.onload=()=>insertImageAtCaret(id,r.result);r.readAsDataURL(f);input.value=''}
 function insertImageAtCaret(id,data){document.getElementById(id)?.focus();document.execCommand('insertHTML',false,`<img src="${data}" alt="image">`)}
@@ -148,12 +211,15 @@ function renderProjects(){
  <div class="card category-card"><div class="section-title"><h2>未分类</h2></div>${state.projects.filter(p=>!p.categoryId).filter(projectMatch).map(projectSummary).join('')||'<div class="empty">无</div>'}</div>`
 }
 function projectMatch(p){const q=projectFilter.trim().toLowerCase();return !q||p.title.toLowerCase().includes(q)||(p.tags||[]).some(t=>t.toLowerCase().includes(q))}
-function projectSummary(p){return `<div class="item project-row" onclick="openProject('${p.id}')"><div class="item-row"><div><div class="item-title">${esc(p.title)}</div><div class="item-meta">Start ${fmtTime(p.startedAt)} · Done ${fmtTime(p.completedAt)} · ${esc(p.status||'doing')}</div>${p.dueAt?`<div class="time-badge ${dueClass(p.dueAt)}">${dueText(p.dueAt)}</div>`:''}<div class="tags">${tagHtml(p.tags)}</div></div><span>›</span></div></div>`}
+function projectSummary(p){
+ const tasks=p.subtasks||[], done=tasks.filter(x=>x.done||x.completedAt).length;
+ return `<div class="item project-row"><div class="card-topline"><input class="main-check" type="checkbox" ${p.completedAt?'checked':''} onchange="event.stopPropagation();finishProject('${p.id}',this.checked)"><div class="card-body" onclick="openProject('${p.id}')"><div class="item-title">${esc(p.title)}</div><div class="item-meta">Start ${fmtTime(p.startedAt)} · Done ${fmtTime(p.completedAt)} · ${done}/${tasks.length} 子任务</div>${p.dueAt?`<div class="time-badge ${dueClass(p.dueAt)}">${dueText(p.dueAt)}</div>`:''}<div class="tags">${tagHtml(p.tags)}</div></div></div><div class="card-actions">${!p.startedAt?`<button class="small-btn" onclick="event.stopPropagation();startProject('${p.id}')">▶ Start</button>`:''}</div>${tasks.length?`<div class="sub-list">${tasks.map(s=>`<div class="sub-inline"><input type="checkbox" ${s.done||s.completedAt?'checked':''} onchange="toggleProjectSub('${p.id}','${s.id}',this.checked)"><span>${esc(s.text||s.title)}</span>${!s.startedAt?`<button class="small-btn" onclick="startProjectSub('${p.id}','${s.id}')">Start</button>`:`<span class="time-badge">${fmtTime(s.startedAt)}→${fmtTime(s.completedAt)}</span>`}${s.dueAt?`<span class="time-badge ${dueClass(s.dueAt)}">${dueText(s.dueAt)}</span>`:''}</div>`).join('')}</div>`:''}</div>`
+}
 function openCategoryModal(id){const c=state.projectCategories.find(x=>x.id===id)||{name:''};modal(`<h2>${id?'编辑':'新建'}分类</h2><input id="catName" value="${esc(c.name)}"><div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveCategory('${id||''}')">保存</button></div>`)}
 async function saveCategory(id){const n=$('#catName').value.trim();if(!n)return;if(id)state.projectCategories.find(x=>x.id===id).name=n;else state.projectCategories.push({id:uid(),name:n});await saveState();closeModal();renderProjects()}
 function openProjectCreate(){modal(`<h2>新建长期任务</h2><div class="form-field"><label>标题</label><input id="pTitle"></div><div class="form-field"><label>分类</label><select id="pCat"><option value="">未分类</option>${state.projectCategories.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div><div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="createProject()">创建</button></div>`)}
 async function createProject(){const p={id:uid(),title:$('#pTitle').value.trim(),categoryId:$('#pCat').value,status:'todo',tags:[],startedAt:null,completedAt:null,dueAt:'',html:'',subtasks:[],handoffs:[],reports:[],questions:[],investigations:[],createdAt:Date.now()};if(!p.title)return;state.projects.unshift(p);await saveState();closeModal();renderProjects();openProject(p.id)}
-function openProject(id){const p=state.projects.find(x=>x.id===id);if(!p)return;drawer(`<div class="drawer-head"><div><h2 style="margin:0">${esc(p.title)}</h2><div class="item-meta">实际开始 ${fmtTime(p.startedAt)} · 实际完成 ${fmtTime(p.completedAt)}</div><div class="tags">${tagHtml(p.tags)}</div></div><button class="ghost-btn" onclick="closeDrawer()">✕</button></div><div class="card-actions" style="margin-top:14px">${!p.startedAt?`<button class="primary-btn" onclick="startProject('${p.id}')">▶ Start 主任务</button>`:''}<button class="ghost-btn" onclick="finishProject('${p.id}')">✅ 完成主任务</button></div><div class="detail-grid" style="margin-top:14px"><div class="form-field"><label>标题</label><input id="pdTitle" value="${esc(p.title)}"></div><div class="form-field"><label>分类</label><select id="pdCat"><option value="">未分类</option>${state.projectCategories.map(c=>`<option value="${c.id}" ${p.categoryId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div></div><div class="detail-grid"><div class="form-field"><label>预计完成时间</label><input type="datetime-local" id="pdDue" value="${esc(p.dueAt||'')}"></div><div class="form-field"><label>状态</label><select id="pdStatus"><option value="todo" ${p.status==='todo'?'selected':''}>TODO</option><option value="doing" ${p.status==='doing'?'selected':''}>DOING</option><option value="waiting" ${p.status==='waiting'?'selected':''}>WAITING</option><option value="done" ${p.status==='done'?'selected':''}>DONE</option></select></div></div><div class="form-field"><label>标签</label><input id="pdTags" value="${esc((p.tags||[]).join(', '))}"></div><h3>项目 Memo / 说明</h3>${richEditor('projectRich',p.html,'记录背景、处理思路，可直接插入 checkbox、图片、link、高亮…')}<div id="projectDrop" class="drop-zone">Ctrl+V 或拖入图片</div><h3>子任务</h3><div id="projectSubs">${(p.subtasks||[]).map(projectSubRow).join('')}</div><button class="small-btn" onclick="addProjectSub()">＋ 子任务</button>${richNoteSection('交接 / 对接人员','handoffs',p)}${richNoteSection('汇报记录','reports',p)}${richNoteSection('被提出的问题','questions',p)}${richNoteSection('需要调查的地方','investigations',p)}<div class="modal-actions"><button class="danger-btn" onclick="deleteProject('${p.id}')">删除项目</button><button class="primary-btn" onclick="saveProjectDrawer('${p.id}')">保存</button></div>`);wireImageDrop('projectDrop','projectRich');['handoffs','reports','questions','investigations'].forEach(k=>(p[k]||[]).forEach(n=>wireImageDrop(`${k}Drop_${n.id}`,`${k}Rich_${n.id}`)))}
+function openProject(id){const p=state.projects.find(x=>x.id===id);if(!p)return;drawer(`<div class="drawer-head"><div><h2 style="margin:0">${esc(p.title)}</h2><div class="item-meta">实际开始 ${fmtTime(p.startedAt)} · 实际完成 ${fmtTime(p.completedAt)}</div><div class="tags">${tagHtml(p.tags)}</div></div><button class="ghost-btn" onclick="closeDrawer()">✕</button></div><div class="card-actions" style="margin-top:14px">${!p.startedAt?`<button class="primary-btn" onclick="startProject('${p.id}')">▶ Start 主任务</button>`:''}<button class="ghost-btn" onclick="finishProject('${p.id}')">✅ 完成主任务</button></div><div class="detail-grid" style="margin-top:14px"><div class="form-field"><label>标题</label><input id="pdTitle" value="${esc(p.title)}"></div><div class="form-field"><label>分类</label><select id="pdCat"><option value="">未分类</option>${state.projectCategories.map(c=>`<option value="${c.id}" ${p.categoryId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div></div><div class="detail-grid"><div class="form-field"><label>预计完成时间</label><input type="datetime-local" id="pdDue" value="${esc(p.dueAt||'')}"></div><div class="form-field"><label>状态</label><select id="pdStatus"><option value="todo" ${p.status==='todo'?'selected':''}>TODO</option><option value="doing" ${p.status==='doing'?'selected':''}>DOING</option><option value="waiting" ${p.status==='waiting'?'selected':''}>WAITING</option><option value="done" ${p.status==='done'?'selected':''}>DONE</option></select></div></div><div class="form-field"><label>标签</label><input id="pdTags" value="${esc((p.tags||[]).join(', '))}"></div><h3>项目 Memo / 说明</h3>${richEditor('projectRich',mergeTasksIntoHtml(p.html,p.subtasks||[]),'文字、子任务、图片、链接可混排；用 ☑ Checkbox 插入项目子任务…')}<div id="projectDrop" class="drop-zone">Ctrl+V 或拖入图片到 Memo 光标位置</div>${richNoteSection('交接 / 对接人员','handoffs',p)}${richNoteSection('汇报记录','reports',p)}${richNoteSection('被提出的问题','questions',p)}${richNoteSection('需要调查的地方','investigations',p)}<div class="modal-actions"><button class="danger-btn" onclick="deleteProject('${p.id}')">删除项目</button><button class="primary-btn" onclick="saveProjectDrawer('${p.id}')">保存</button></div>`);wireImageDrop('projectDrop','projectRich');['handoffs','reports','questions','investigations'].forEach(k=>(p[k]||[]).forEach(n=>wireImageDrop(`${k}Drop_${n.id}`,`${k}Rich_${n.id}`)))}
 function projectSubRow(s){return `<div class="item psub" data-id="${s.id}"><div class="project-sub-inline"><input type="checkbox" class="ps-done" ${s.done||s.completedAt?'checked':''}><input class="ps-title" value="${esc(s.title)}">${!s.startedAt?`<button class="small-btn" type="button" onclick="startProjectSubUI(this)">Start</button>`:`<span class="time-badge">${fmtTime(s.startedAt)}→${fmtTime(s.completedAt)}</span>`}<span></span></div><div class="detail-grid" style="margin-top:8px"><input type="datetime-local" class="ps-due" title="预计完成时间" value="${esc(s.dueAt||'')}"><textarea class="ps-note" placeholder="子任务 Memo">${esc(s.note||'')}</textarea></div><input type="hidden" class="ps-started" value="${s.startedAt||''}"><input type="hidden" class="ps-completed" value="${s.completedAt||''}"><button class="danger-btn" onclick="this.closest('.psub').remove()">删除</button></div>`}
 function addProjectSub(){document.getElementById('projectSubs').insertAdjacentHTML('beforeend',projectSubRow({id:uid(),title:'',dueAt:'',startedAt:null,completedAt:null,note:'',done:false}))}
 function startProjectSubUI(btn){const e=btn.closest('.psub');e.querySelector('.ps-started').value=Date.now();btn.outerHTML=`<span class="time-badge">已开始</span>`}
@@ -162,8 +228,31 @@ function richNoteRow(key,n){return `<div class="panel-note nrow" data-id="${n.id
 function addRichNoteRow(key){const n={id:uid(),date:'',who:'',html:''};document.getElementById(key+'List').insertAdjacentHTML('beforeend',richNoteRow(key,n));wireImageDrop(`${key}Drop_${n.id}`,`${key}Rich_${n.id}`)}
 function collectRichNotes(key){return [...document.querySelectorAll(`#${key}List .nrow`)].map(e=>({id:e.dataset.id,date:e.querySelector('.n-date').value,who:e.querySelector('.n-who').value.trim(),html:e.querySelector(`#${key}Rich_${e.dataset.id}`).innerHTML})).filter(x=>x.date||x.who||x.html)}
 async function startProject(id){const p=state.projects.find(x=>x.id===id);if(!p.startedAt)p.startedAt=Date.now();p.status='doing';await saveState();openProject(id);renderProjects()}
-async function finishProject(id){const p=state.projects.find(x=>x.id===id);if(!p.startedAt)p.startedAt=Date.now();p.completedAt=Date.now();p.status='done';await saveState();closeDrawer();renderProjects()}
-async function saveProjectDrawer(id){const p=state.projects.find(x=>x.id===id);const old=p.subtasks||[];Object.assign(p,{title:$('#pdTitle').value.trim(),categoryId:$('#pdCat').value,dueAt:$('#pdDue').value,status:$('#pdStatus').value,tags:splitTags($('#pdTags').value),html:$('#projectRich').innerHTML,subtasks:$$('.psub').map(e=>{const prev=old.find(x=>x.id===e.dataset.id)||{};const done=e.querySelector('.ps-done').checked;const started=e.querySelector('.ps-started').value?Number(e.querySelector('.ps-started').value):(prev.startedAt||null);return{id:e.dataset.id,title:e.querySelector('.ps-title').value.trim(),dueAt:e.querySelector('.ps-due').value,note:e.querySelector('.ps-note').value.trim(),startedAt:started,completedAt:done?(prev.completedAt||Date.now()):null,done}}).filter(x=>x.title),handoffs:collectRichNotes('handoffs'),reports:collectRichNotes('reports'),questions:collectRichNotes('questions'),investigations:collectRichNotes('investigations')});if(p.subtasks.length&&p.subtasks.every(x=>x.done)&&!p.completedAt){if(!p.startedAt)p.startedAt=Date.now();p.completedAt=Date.now();p.status='done'}await saveState();closeDrawer();renderProjects();toast('项目已保存')}
+async function finishProject(id,done=true){
+ const p=state.projects.find(x=>x.id===id);if(!p)return;
+ if(done){if(!p.startedAt)p.startedAt=Date.now();p.completedAt=Date.now();p.status='done'}
+ else{p.completedAt=null;if(p.status==='done')p.status='doing'}
+ await saveState();renderProjects();if($('#drawerRoot .drawer'))openProject(id)
+}
+async function startProjectSub(pid,sid){
+ const p=state.projects.find(x=>x.id===pid),s=p?.subtasks?.find(x=>x.id===sid);if(!s)return;
+ if(!s.startedAt)s.startedAt=Date.now();if(!p.startedAt)p.startedAt=Date.now();await saveState();renderProjects()
+}
+async function toggleProjectSub(pid,sid,done){
+ const p=state.projects.find(x=>x.id===pid),s=p?.subtasks?.find(x=>x.id===sid);if(!s)return;
+ s.done=done;if(done){if(!s.startedAt)s.startedAt=Date.now();s.completedAt=Date.now()}else s.completedAt=null;
+ if(done&&p.subtasks.length&&p.subtasks.every(x=>x.done||x.completedAt)){if(!p.startedAt)p.startedAt=Date.now();p.completedAt=Date.now();p.status='done'}
+ await saveState();renderProjects()
+}
+async function saveProjectDrawer(id){
+ const p=state.projects.find(x=>x.id===id);
+ const tasks=collectInlineTasks('projectRich').map(x=>({...x,title:x.text,note:''}));
+ Object.assign(p,{title:$('#pdTitle').value.trim(),categoryId:$('#pdCat').value,dueAt:$('#pdDue').value,status:$('#pdStatus').value,tags:splitTags($('#pdTags').value),html:$('#projectRich').innerHTML,subtasks:tasks,handoffs:collectRichNotes('handoffs'),reports:collectRichNotes('reports'),questions:collectRichNotes('questions'),investigations:collectRichNotes('investigations')});
+ if(p.subtasks.length&&p.subtasks.every(x=>x.done)&&!p.completedAt){
+   if(!p.startedAt)p.startedAt=Date.now();p.completedAt=Date.now();p.status='done';
+ }
+ await saveState();closeDrawer();renderProjects();toast('项目已保存')
+}
 async function deleteProject(id){if(!confirm('删除这个项目？'))return;state.projects=state.projects.filter(x=>x.id!==id);await saveState();closeDrawer();renderProjects()}
 
 function dueClass(due){if(!due)return'';const x=new Date(due).getTime()-Date.now();return x<0?'due-late':x<86400000?'due-soon':''}
@@ -188,11 +277,34 @@ function cardHtml(t){const all=(t.checks||[]).length,done=(t.checks||[]).filter(
 function addKanbanColumn(){const n=prompt('新列名称，例如 REVIEW / BLOCKED');if(!n)return;state.kanbanColumns.push({id:uid(),name:n});saveState().then(renderKanban)}
 function renameKanbanColumn(id){const c=state.kanbanColumns.find(x=>x.id===id),n=prompt('列名称',c.name);if(!n)return;c.name=n;saveState().then(renderKanban)}
 async function dropTask(ev,status){const t=state.kanban.find(x=>x.id===ev.dataTransfer.getData('text/plain'));if(t){t.status=status;await saveState();renderKanban()}}
-function openKanbanCard(id){const t=state.kanban.find(x=>x.id===id)||{id:'',title:'',status:state.kanbanColumns[0]?.id||'todo',html:'',checks:[],images:[],tags:[],startedAt:null,completedAt:null,dueAt:'',showMemo:false};drawer(`<div class="drawer-head"><div><h2 style="margin:0">${id?'Kanban 卡片':'新建 Kanban 卡片'}</h2><div class="item-meta">实际开始 ${fmtTime(t.startedAt)} · 实际完成 ${fmtTime(t.completedAt)}</div></div><button class="ghost-btn" onclick="closeDrawer()">✕</button></div><div class="form-field"><label>标题</label><input id="kcTitle" value="${esc(t.title)}"></div><div class="detail-grid"><div class="form-field"><label>状态</label><select id="kcStatus">${state.kanbanColumns.map(c=>`<option value="${c.id}" ${t.status===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div><div class="form-field"><label>预计完成时间</label><input type="datetime-local" id="kcDue" value="${esc(t.dueAt||'')}"></div></div><div class="form-field"><label>标签</label><input id="kcTags" value="${esc((t.tags||[]).join(', '))}"></div><h3>Memo / 作业说明</h3>${richEditor('kanbanRich',t.html,'可在任意位置插入 checkbox、图片、链接、高亮文字…')}<div id="kanbanDrop" class="drop-zone">也可以 Ctrl+V 粘贴截图，或拖图片到编辑框</div><h3>结构化子任务</h3><div id="kcChecks">${(t.checks||[]).map(checkRow).join('')}</div><button class="small-btn" onclick="addCheckRow('kcChecks')">＋ 子任务</button><div class="modal-actions">${id?`<button class="ghost-btn" onclick="saveKanbanTemplate('${t.id}')">☆ 保存为模板</button><button class="danger-btn" onclick="deleteKanban('${t.id}')">删除</button>`:''}<button class="primary-btn" onclick="saveKanbanDrawer('${t.id}')">保存</button></div>`);wireImageDrop('kanbanDrop','kanbanRich')}
-function checkRow(c){return `<div class="item check-row" data-id="${c.id}"><div class="detail-grid"><input class="c-text" placeholder="子任务" value="${esc(c.text)}"><input class="c-due" type="datetime-local" title="预计完成时间" value="${esc(c.dueAt||'')}"></div><div class="item-meta">Start ${fmtTime(c.startedAt)} · Done ${fmtTime(c.completedAt)}</div><label class="checkbox-line"><input type="checkbox" class="c-done" ${c.done?'checked':''}> 完成</label></div>`}
+function openKanbanCard(id){
+ const t=state.kanban.find(x=>x.id===id)||{id:'',title:'',status:state.kanbanColumns[0]?.id||'todo',html:'',checks:[],images:[],tags:[],startedAt:null,completedAt:null,dueAt:'',showMemo:false};
+ const merged=mergeTasksIntoHtml(t.html,t.checks||[]);
+ drawer(`<div class="drawer-head"><div><h2 style="margin:0">${id?'Kanban 卡片':'新建 Kanban 卡片'}</h2><div class="item-meta">实际开始 ${fmtTime(t.startedAt)} · 实际完成 ${fmtTime(t.completedAt)}</div></div><button class="ghost-btn" onclick="closeDrawer()">✕</button></div>
+ <div class="form-field"><label>标题</label><input id="kcTitle" value="${esc(t.title)}"></div>
+ <div class="detail-grid"><div class="form-field"><label>状态</label><select id="kcStatus">${state.kanbanColumns.map(c=>`<option value="${c.id}" ${t.status===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div><div class="form-field"><label>主任务预计完成时间</label><input type="datetime-local" id="kcDue" value="${esc(t.dueAt||'')}"></div></div>
+ <div class="form-field"><label>标签</label><input id="kcTags" value="${esc((t.tags||[]).join(', '))}"></div>
+ <h3>Memo / 作业说明</h3>
+ <div class="item-meta" style="margin-bottom:8px">子任务直接插在下面 Memo 任意位置。点工具栏“☑ Checkbox”即可插入；每个子任务自带 Start、预计时间和完成勾选。</div>
+ ${richEditor('kanbanRich',merged,'文字、子任务、图片、链接都可以混排在这里…')}
+ <div id="kanbanDrop" class="drop-zone">也可以 Ctrl+V 粘贴截图，或拖图片到编辑框光标位置</div>
+ <div class="modal-actions">${id?`<button class="ghost-btn" onclick="saveKanbanTemplate('${t.id}')">☆ 保存为模板</button><button class="danger-btn" onclick="deleteKanban('${t.id}')">删除</button>`:''}<button class="primary-btn" onclick="saveKanbanDrawer('${t.id}')">保存</button></div>`);
+ wireImageDrop('kanbanDrop','kanbanRich')
+}
 function addCheckRow(id){document.getElementById(id).insertAdjacentHTML('beforeend',checkRow({id:uid(),text:'',done:false,startedAt:null,completedAt:null,dueAt:''}))}
 function collectChecks(sel,old=[]){return $$(sel+' .check-row').map(e=>{const prev=old.find(x=>x.id===e.dataset.id)||{};const done=e.querySelector('.c-done').checked;return{id:e.dataset.id,text:e.querySelector('.c-text').value.trim(),dueAt:e.querySelector('.c-due').value,done,startedAt:prev.startedAt||null,completedAt:done?(prev.completedAt||Date.now()):null}}).filter(x=>x.text)}
-async function saveKanbanDrawer(id){let t=id?state.kanban.find(x=>x.id===id):{id:uid(),images:[],startedAt:null,completedAt:null,showMemo:false};const old=t.checks||[];Object.assign(t,{title:$('#kcTitle').value.trim(),status:$('#kcStatus').value,tags:splitTags($('#kcTags').value),html:$('#kanbanRich').innerHTML,checks:collectChecks('#kcChecks',old),dueAt:$('#kcDue').value});if(t.checks.length&&t.checks.every(x=>x.done)&&!t.completedAt){if(!t.startedAt)t.startedAt=Date.now();t.completedAt=Date.now();t.status=state.kanbanColumns.find(c=>c.name.toUpperCase()==='DONE')?.id||'done'}if(!id)state.kanban.push(t);await saveState();closeDrawer();renderKanban()}
+async function saveKanbanDrawer(id){
+ let t=id?state.kanban.find(x=>x.id===id):{id:uid(),images:[],startedAt:null,completedAt:null,showMemo:false};
+ const tasks=collectInlineTasks('kanbanRich');
+ Object.assign(t,{title:$('#kcTitle').value.trim(),status:$('#kcStatus').value,tags:splitTags($('#kcTags').value),html:$('#kanbanRich').innerHTML,checks:tasks,dueAt:$('#kcDue').value});
+ if(t.checks.length&&t.checks.every(x=>x.done)&&!t.completedAt){
+   if(!t.startedAt)t.startedAt=Date.now();
+   t.completedAt=Date.now();
+   t.status=state.kanbanColumns.find(c=>c.name.toUpperCase()==='DONE')?.id||'done';
+ }
+ if(!id)state.kanban.push(t);
+ await saveState();closeDrawer();renderKanban()
+}
 async function deleteKanban(id){state.kanban=state.kanban.filter(x=>x.id!==id);await saveState();closeDrawer();renderKanban()}
 function imageGrid(images,type,id){return `<div class="memo-images">${(images||[]).map(im=>`<div><img src="${im.data}"><button class="danger-btn" onclick="deleteImage('${type}','${id}','${im.id}')">删除</button></div>`).join('')}</div>`}
 async function deleteImage(type,id,iid){const arr=type==='kanban'?state.kanban.find(x=>x.id===id)?.images:type==='memo'?state.memos.find(x=>x.id===id)?.images:state.projects.find(x=>x.id===id)?.images;if(arr){const i=arr.findIndex(x=>x.id===iid);if(i>=0)arr.splice(i,1);await saveState(); if(type==='kanban')openKanbanCard(id);if(type==='memo')renderMemo();if(type==='project')openProject(id)}}

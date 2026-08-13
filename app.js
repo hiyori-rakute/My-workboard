@@ -2917,3 +2917,177 @@ function wireImageDrop(zoneId,editorId,callback){
   };
 }
 /* ======================= END V10.8 ======================= */
+
+
+/* ======================= V10.9 RECURRENCE FINAL OVERRIDES ======================= */
+function lastDayOfMonthV109(y,m){return new Date(y,m,0).getDate()}
+function datePartsV109(v){const [y,m,d]=String(v).slice(0,10).split('-').map(Number);const dt=new Date(y,m-1,d,12);return{y,m,d,weekday:dt.getDay(),dt}}
+function ymdV109(dt){return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`}
+function monthsBetweenV109(a,b){return (b.getFullYear()-a.getFullYear())*12+(b.getMonth()-a.getMonth())}
+function sameNumsV109(a,b){return JSON.stringify((a||[]).map(Number).sort())===JSON.stringify((b||[]).map(Number).sort())}
+
+/* ---------- Kanban recurrence ---------- */
+function scheduledDateForRuleV109(rule,now=new Date()){
+  const y=now.getFullYear(),m=now.getMonth()+1,last=lastDayOfMonthV109(y,m);
+  const freq=rule.frequency||'monthly';
+  if(freq==='daily')return new Date(y,m-1,now.getDate(),9);
+  if(freq==='weekly'){
+    const wanted=Number(rule.weekday??1),delta=(now.getDay()-wanted+7)%7;
+    const d=new Date(y,m-1,now.getDate()-delta,9);return d;
+  }
+  if(freq==='monthly'||freq==='monthend'){
+    const day=(freq==='monthend'||rule.monthEnd)?last:Math.min(Number(rule.dayOfMonth||1),last);
+    return new Date(y,m-1,day,9);
+  }
+  if(freq==='quarterly'){
+    const anchor=datePartsV109(rule.anchorDate||todayISO());
+    if(monthsBetweenV109(anchor.dt,new Date(y,m-1,1,12))<0)return null;
+    if(monthsBetweenV109(anchor.dt,new Date(y,m-1,1,12))%3!==0)return null;
+    const day=rule.monthEnd?last:Math.min(Number(rule.dayOfMonth||anchor.d||1),last);
+    return new Date(y,m-1,day,9);
+  }
+  if(freq==='yearly'){
+    const months=(rule.months?.length?rule.months:[Number(rule.monthOfYear||1)]).map(Number);
+    if(!months.includes(m))return null;
+    const day=rule.monthEnd?last:Math.min(Number(rule.dayOfMonth||1),last);
+    return new Date(y,m-1,day,9);
+  }
+  return null;
+}
+function recurrenceDue(rule,d=new Date()){
+  if(!rule?.enabled)return false;
+  const scheduled=scheduledDateForRuleV109(rule,d);if(!scheduled)return false;
+  return d>=scheduled;
+}
+function recurrenceKey(rule,d=new Date()){
+  const scheduled=scheduledDateForRuleV109(rule,d);if(!scheduled)return '';
+  const freq=rule.frequency||'monthly';
+  if(freq==='daily')return ymdV109(scheduled);
+  if(freq==='weekly')return `W:${ymdV109(scheduled)}`;
+  return `${freq}:${ymdV109(scheduled)}`;
+}
+function toggleRepeatFieldsV109(){
+  const f=$('#repFreq')?.value;if(!f)return;
+  const show=(id,on)=>{const e=$(id);if(e)e.style.display=on?'':'none'};
+  show('#repWeekBox',f==='weekly');
+  show('#repQuarterBox',f==='quarterly');
+  show('#repYearBox',f==='yearly');
+  show('#repDayBox',['monthly','quarterly','yearly'].includes(f));
+  show('#repMonthEndWrap',['monthly','quarterly','yearly'].includes(f));
+}
+function openRepeatModal(id){
+  const t=state.kanban.find(x=>x.id===id);if(!t)return;
+  const r=state.kanbanRecurring.find(x=>x.sourceCardId===id)||{frequency:'monthly',dayOfMonth:1,monthOfYear:1,months:[1],weekday:1,targetColumnId:t.status,enabled:true,anchorDate:todayISO(),monthEnd:false};
+  const months=r.months?.length?r.months:[Number(r.monthOfYear||1)];
+  modal(`<h2>🔁 定期重复</h2>
+    <div class="form-field"><label>频率</label><select id="repFreq" onchange="toggleRepeatFieldsV109()">
+      <option value="daily" ${r.frequency==='daily'?'selected':''}>每天</option>
+      <option value="weekly" ${r.frequency==='weekly'?'selected':''}>每周</option>
+      <option value="monthly" ${r.frequency==='monthly'?'selected':''}>每月</option>
+      <option value="monthend" ${r.frequency==='monthend'?'selected':''}>每月最后一天</option>
+      <option value="quarterly" ${r.frequency==='quarterly'?'selected':''}>每3个月</option>
+      <option value="yearly" ${r.frequency==='yearly'?'selected':''}>每年指定月份</option>
+    </select></div>
+    <div id="repWeekBox" class="form-field"><label>星期（0=日, 1=一 … 6=六）</label><input id="repWeek" type="number" min="0" max="6" value="${r.weekday??1}"></div>
+    <div id="repQuarterBox" class="form-field"><label>每3个月起算日期</label><input id="repAnchor" type="date" value="${esc(r.anchorDate||todayISO())}"></div>
+    <div id="repYearBox" class="form-field"><label>每年执行月份（可多选，例如 4月 + 8月）</label><div class="month-picks-v109">${Array.from({length:12},(_,i)=>i+1).map(m=>`<label><input type="checkbox" class="repMonthV109" value="${m}" ${months.includes(m)?'checked':''}>${m}月</label>`).join('')}</div></div>
+    <div id="repDayBox" class="form-field"><label>执行日</label><input id="repDay" type="number" min="1" max="31" value="${r.dayOfMonth||1}"></div>
+    <label id="repMonthEndWrap" class="checkbox-line"><input id="repMonthEnd" type="checkbox" ${r.monthEnd?'checked':''}>该月最后一天执行</label>
+    <div class="form-field"><label>自动生成到哪一列</label><select id="repCol">${state.kanbanColumns.map(c=>`<option value="${c.id}" ${r.targetColumnId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div>
+    <label class="checkbox-line"><input id="repEnabled" type="checkbox" ${r.enabled!==false?'checked':''}>启用</label>
+    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRepeatRuleV109('${id}')">保存</button></div>`);
+  setTimeout(toggleRepeatFieldsV109,0);
+}
+async function saveRepeatRuleV109(id){
+  const t=state.kanban.find(x=>x.id===id);let r=state.kanbanRecurring.find(x=>x.sourceCardId===id);
+  if(!r){r={id:uid(),sourceCardId:id};state.kanbanRecurring.push(r)}
+  const months=$$('.repMonthV109:checked').map(x=>Number(x.value));
+  Object.assign(r,{name:t.title,frequency:$('#repFreq').value,dayOfMonth:+($('#repDay')?.value||1),weekday:+($('#repWeek')?.value||1),anchorDate:$('#repAnchor')?.value||todayISO(),months:months.length?months:[1],monthOfYear:Number(months[0]||1),monthEnd:!!$('#repMonthEnd')?.checked,targetColumnId:$('#repCol').value,enabled:$('#repEnabled').checked,snapshot:recurringSnapshotFromCard(t),lastGeneratedKey:null});
+  ensureRecurringKanban();await saveState();closeModal();renderKanban();toast('定期重复已保存');
+}
+function ensureRecurringKanban(){
+  let changed=false,now=new Date();
+  for(const r of state.kanbanRecurring||[]){
+    if(!r.enabled||!recurrenceDue(r,now))continue;
+    const key=recurrenceKey(r,now);if(!key||r.lastGeneratedKey===key)continue;
+    const scheduled=scheduledDateForRuleV109(r,now);if(!scheduled)continue;
+    const snap=r.snapshot||{}, ds=ymdV109(scheduled);
+    const card={id:uid(),title:snap.title||r.name||'定期任务',status:r.targetColumnId||state.kanbanColumns[0]?.id||'todo',html:snap.html||'',checks:clearTaskTimes(snap.checks||[]),images:[],tags:[...(snap.tags||[])],startedAt:null,completedAt:null,dueAt:'',plannedStartAt:`${ds}T09:00`,showMemo:false,archived:false,recurrenceRuleId:r.id,generatedKey:key,createdAt:Date.now()};
+    card.html=mergeTasksIntoHtml(card.html,card.checks);state.kanban.push(card);r.lastGeneratedKey=key;changed=true;
+  }
+  return changed;
+}
+
+/* ---------- Routine recurrence + calendar ---------- */
+function routineModeV109(r){return r.repeatV109||r.repeat||'weekdays'}
+function routineExplicitWeekdaysV109(r){return (r.weekdays||[]).map(Number)}
+function isRoutineDue(r,date){
+  const p=datePartsV109(date),mode=routineModeV109(r),wds=routineExplicitWeekdaysV109(r);
+  if(mode==='daily')return true;
+  if(mode==='weekdays'){
+    /* legacy compatibility: if user manually narrowed weekday checks, honor them */
+    if(wds.length && !sameNumsV109(wds,[1,2,3,4,5]))return wds.includes(p.weekday);
+    return p.weekday>=1&&p.weekday<=5;
+  }
+  if(mode==='custom')return wds.includes(p.weekday);
+  if(mode==='monthly')return p.d===Math.min(Number(r.monthDay||1),lastDayOfMonthV109(p.y,p.m));
+  if(mode==='monthend')return p.d===lastDayOfMonthV109(p.y,p.m);
+  if(mode==='quarterly'){
+    const a=datePartsV109(r.anchorDate||todayISO()),diff=monthsBetweenV109(a.dt,new Date(p.y,p.m-1,1,12));
+    if(diff<0||diff%3!==0)return false;
+    const day=r.monthEnd?lastDayOfMonthV109(p.y,p.m):Math.min(Number(r.monthDay||a.d||1),lastDayOfMonthV109(p.y,p.m));
+    return p.d===day;
+  }
+  if(mode==='yearly'){
+    const ms=(r.months?.length?r.months:[Number(r.month||1)]).map(Number);if(!ms.includes(p.m))return false;
+    const day=r.monthEnd?lastDayOfMonthV109(p.y,p.m):Math.min(Number(r.monthDay||1),lastDayOfMonthV109(p.y,p.m));return p.d===day;
+  }
+  return false;
+}
+function repeatText(r){
+  const mode=routineModeV109(r),wds=routineExplicitWeekdaysV109(r),names=['日','一','二','三','四','五','六'];
+  if(mode==='daily')return '每天';
+  if(mode==='weekdays'&&wds.length&&!sameNumsV109(wds,[1,2,3,4,5]))return '每周 '+wds.map(x=>names[x]).join('、');
+  if(mode==='weekdays')return '工作日';
+  if(mode==='custom')return '每周 '+wds.map(x=>names[x]).join('、');
+  if(mode==='monthly')return `每月${r.monthDay||1}日`;
+  if(mode==='monthend')return '每月最后一天';
+  if(mode==='quarterly')return `每3个月${r.monthEnd?'月末':(r.monthDay||1)+'日'}`;
+  if(mode==='yearly')return `每年 ${(r.months||[r.month||1]).join('、')}月 ${r.monthEnd?'月末':(r.monthDay||1)+'日'}`;
+  return mode;
+}
+function toggleRoutineFieldsV109(){
+  const m=$('#rRepeatV109')?.value;if(!m)return;const show=(id,on)=>{const e=$(id);if(e)e.style.display=on?'':'none'};
+  show('#rWeekBoxV109',m==='custom'||m==='weekdays');
+  show('#rDayBoxV109',['monthly','quarterly','yearly'].includes(m));
+  show('#rAnchorBoxV109',m==='quarterly');
+  show('#rMonthsBoxV109',m==='yearly');
+  show('#rMonthEndBoxV109',['monthly','quarterly','yearly'].includes(m));
+}
+function openRoutineModal(id){
+  const r=state.routines.find(x=>x.id===id)||{name:'',repeat:'weekdays',weekdays:[1,2,3,4,5],subtasks:[],tags:[],icon:'●',monthDay:1,months:[1],monthEnd:false,anchorDate:todayISO()};
+  const mode=routineModeV109(r),months=r.months?.length?r.months:[Number(r.month||1)];
+  modal(`<h2>${id?'编辑':'新建'} Routine</h2>
+    <div class="form-row"><div class="form-field"><label>名称</label><input id="rName" value="${esc(r.name)}"></div><div class="form-field"><label>图标</label><input id="rIcon" value="${esc(r.icon||'●')}" maxlength="4"></div></div>
+    <div class="form-field"><label>标签</label><input id="rTags" value="${esc((r.tags||[]).join(', '))}"></div>
+    <div class="form-field"><label>重复</label><select id="rRepeatV109" onchange="toggleRoutineFieldsV109()">
+      <option value="daily" ${mode==='daily'?'selected':''}>每天</option><option value="weekdays" ${mode==='weekdays'?'selected':''}>工作日</option><option value="custom" ${mode==='custom'?'selected':''}>指定星期</option><option value="monthly" ${mode==='monthly'?'selected':''}>每月指定日期</option><option value="monthend" ${mode==='monthend'?'selected':''}>每月最后一天</option><option value="quarterly" ${mode==='quarterly'?'selected':''}>每3个月</option><option value="yearly" ${mode==='yearly'?'selected':''}>每年指定月份</option>
+    </select></div>
+    <div id="rWeekBoxV109"><div class="field-hint-v109">工作日默认周一～周五；如果只勾周五，则日历只在周五显示。</div>${['日','一','二','三','四','五','六'].map((n,i)=>`<label class="checkbox-line"><input type="checkbox" class="rWeek" value="${i}" ${(r.weekdays||[]).map(Number).includes(i)?'checked':''}>周${n}</label>`).join('')}</div>
+    <div id="rDayBoxV109" class="form-field"><label>执行日</label><input id="rMonthDayV109" type="number" min="1" max="31" value="${r.monthDay||1}"></div>
+    <div id="rAnchorBoxV109" class="form-field"><label>每3个月起算日期</label><input id="rAnchorV109" type="date" value="${esc(r.anchorDate||todayISO())}"></div>
+    <div id="rMonthsBoxV109" class="form-field"><label>每年执行月份（可多选，例如 4月 + 8月）</label><div class="month-picks-v109">${Array.from({length:12},(_,i)=>i+1).map(m=>`<label><input type="checkbox" class="rMonthV109" value="${m}" ${months.includes(m)?'checked':''}>${m}月</label>`).join('')}</div></div>
+    <label id="rMonthEndBoxV109" class="checkbox-line"><input id="rMonthEndV109" type="checkbox" ${r.monthEnd?'checked':''}>该月最后一天执行</label>
+    <h3>子任务</h3><div id="rSubs">${(r.subtasks||[]).map(routineSubEditRow).join('')}</div><button class="small-btn" onclick="$('#rSubs').insertAdjacentHTML('beforeend',routineSubEditRow({id:uid(),title:''}))">＋子任务</button>
+    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRoutineV109('${id||''}')">保存</button></div>`);
+  setTimeout(toggleRoutineFieldsV109,0);
+}
+async function saveRoutineV109(id){
+  const months=$$('.rMonthV109:checked').map(x=>Number(x.value));
+  const old=id?state.routines.find(x=>x.id===id):null;
+  const x={...(old||{}),id:id||uid(),name:$('#rName').value.trim(),icon:($('#rIcon').value.trim()||'●'),tags:splitTags($('#rTags').value),repeat:$('#rRepeatV109').value,repeatV109:$('#rRepeatV109').value,weekdays:$$('.rWeek:checked').map(x=>Number(x.value)),monthDay:Number($('#rMonthDayV109')?.value||1),anchorDate:$('#rAnchorV109')?.value||todayISO(),months:months.length?months:[1],month:Number(months[0]||1),monthEnd:!!$('#rMonthEndV109')?.checked,subtasks:$$('.rsub').map(e=>({id:e.dataset.id,title:e.querySelector('.rsub-title').value.trim()})).filter(x=>x.title)};
+  if(id)state.routines[state.routines.findIndex(r=>r.id===id)]=x;else state.routines.push(x);
+  await saveState();closeModal();renderAll();
+}
+function cloneRoutineSnapshot(r){return{name:r.name,icon:r.icon||'●',tags:[...(r.tags||[])],repeat:r.repeat,repeatV109:r.repeatV109||r.repeat,weekdays:[...(r.weekdays||[])],monthDay:r.monthDay||1,anchorDate:r.anchorDate||'',months:[...(r.months||[])],month:r.month||1,monthEnd:!!r.monthEnd,subtasks:(r.subtasks||[]).map(s=>({id:uid(),title:s.title}))}}
+/* ======================= END V10.9 ======================= */

@@ -341,3 +341,6 @@ input,select,textarea{width:100%;border:1px solid var(--line);border-radius:11px
 .legacy-images-v107 .memo-images{
   margin-top:8px;
 }
+
+/* V10.9 */
+.month-picks-v109{display:grid;grid-template-columns:repeat(6,minmax(70px,1fr));gap:7px}.month-picks-v109 label{display:flex;align-items:center;gap:5px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff}.field-hint-v109{font-size:12px;color:var(--muted);margin:3px 0 8px}@media(max-width:800px){.month-picks-v109{grid-template-columns:repeat(3,1fr)}}

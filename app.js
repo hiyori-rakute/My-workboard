@@ -1792,3 +1792,147 @@ async function saveKanbanDrawer(id){
   await saveState();closeDrawer();renderKanban();
 }
 /* ======================= END V10.1 ======================= */
+
+
+/* ======================= V10.2 KANBAN TASK FIX ======================= */
+
+/* Current rich-task DOM has .inline-task-text directly inside .inline-task.
+   Older builds used .inline-task-head. Support both and recurse only through
+   the current task's direct .inline-children container. */
+function collectInlineTaskEl(el){
+  const directText =
+    el.querySelector(':scope > .inline-task-text') ||
+    el.querySelector(':scope > .inline-task-head > .inline-task-text');
+
+  let childContainer=null;
+  const wrap=el.closest('.inline-task-wrap');
+  if(wrap){
+    childContainer=[...wrap.children].find(x=>x.classList?.contains('inline-children'))||null;
+  }else{
+    childContainer=[...el.children].find(x=>x.classList?.contains('inline-children'))||null;
+  }
+
+  const childTaskEls=childContainer
+    ? [...childContainer.children]
+        .map(x=>x.classList?.contains('inline-task-wrap') ? x.querySelector(':scope > .inline-task') : (x.classList?.contains('inline-task')?x:null))
+        .filter(Boolean)
+    : [];
+
+  return {
+    id:el.dataset.taskId||uid(),
+    text:(directText?.innerText||directText?.textContent||'').trim(),
+    dueAt:el.dataset.due||'',
+    startedAt:el.dataset.started?Number(el.dataset.started):null,
+    completedAt:el.dataset.completed?Number(el.dataset.completed):null,
+    done:!!el.dataset.completed,
+    children:childTaskEls.map(collectInlineTaskEl).filter(x=>x.text)
+  };
+}
+
+function collectInlineTasks(editorId){
+  const ed=document.getElementById(editorId);
+  if(!ed)return[];
+
+  const roots=[...ed.children].flatMap(node=>{
+    if(node.classList?.contains('inline-task-wrap')){
+      const t=node.querySelector(':scope > .inline-task');
+      return t?[t]:[];
+    }
+    if(node.classList?.contains('inline-task'))return[node];
+    return [...node.querySelectorAll?.(':scope > .inline-task-wrap > .inline-task')||[]];
+  });
+
+  /* Fallback for content pasted/wrapped by the browser. */
+  const usable=roots.length?roots:
+    [...ed.querySelectorAll('.inline-task')].filter(el=>{
+      const parentWrap=el.closest('.inline-task-wrap');
+      return !parentWrap?.parentElement?.closest('.inline-task-wrap');
+    });
+
+  return usable.map(collectInlineTaskEl).filter(x=>x.text);
+}
+
+/* For existing V10.1 cards that have 0/0 checks but still retain rich HTML,
+   recover the task tree directly from their saved Memo HTML. */
+function kanbanTasksForCardV102(t){
+  if(Array.isArray(t.checks)&&countTasks(t.checks).all)return t.checks;
+  if(!t.html)return[];
+
+  const box=document.createElement('div');
+  box.innerHTML=t.html;
+
+  const roots=[...box.children].flatMap(node=>{
+    if(node.classList?.contains('inline-task-wrap')){
+      const task=node.querySelector(':scope > .inline-task');
+      return task?[task]:[];
+    }
+    if(node.classList?.contains('inline-task'))return[node];
+    return [];
+  });
+
+  const usable=roots.length?roots:
+    [...box.querySelectorAll('.inline-task')].filter(el=>{
+      const wrap=el.closest('.inline-task-wrap');
+      return !wrap?.parentElement?.closest('.inline-task-wrap');
+    });
+
+  return usable.map(collectInlineTaskEl).filter(x=>x.text);
+}
+
+function cardHtml(t,c=null){
+  c=c||columnForCard(t);
+  const tasks=kanbanTasksForCardV102(t),n=countTasks(tasks);
+  const search=((t.title||'')+' '+(t.tags||[]).join(' ')).toLowerCase();
+
+  return `<div class="task-card ${t.completedAt?'done-card':''}" data-search="${esc(search)}" draggable="true"
+    style="background:${cardColorFor(t,c)}"
+    ondragstart="event.dataTransfer.setData('text/plain','${t.id}')">
+    ${kanbanMiniActions(t)}
+    <div class="card-topline">
+      <input class="main-check" type="checkbox" ${t.completedAt?'checked':''} onclick="event.stopPropagation()" onchange="finishKanbanTask('${t.id}',this.checked)">
+      <div class="card-body" onclick="openKanbanCard('${t.id}')">
+        <div class="item-title">${esc(t.title)}</div>
+        <div class="tags">${tagHtml(t.tags)}</div>
+        <div class="item-meta">Start ${fmtTime(t.startedAt)} · Done ${fmtTime(t.completedAt)} · ${n.done}/${n.all} 子任务</div>
+        ${t.plannedStartAt?`<span class="micro-due">计划开始 ${esc(t.plannedStartAt.replace('T',' '))}</span>`:''}
+        ${t.dueAt?`<span class="micro-due ${dueClass(t.dueAt)}">${dueText(t.dueAt)}</span>`:''}
+      </div>
+    </div>
+    ${t.showMemo&&t.html?`<div class="rich-preview compact-preview">${t.html}</div>`:''}
+    ${n.all?`<div class="sub-list">${taskQuickTree(tasks,'kanban',t.id)}</div>`:''}
+  </div>`;
+}
+
+async function saveKanbanDrawer(id){
+  let t=id?state.kanban.find(x=>x.id===id):{
+    id:uid(),images:[],startedAt:null,completedAt:null,showMemo:false,archived:false
+  };
+  const tasks=collectInlineTasks('kanbanRich');
+
+  Object.assign(t,{
+    title:$('#kcTitle').value.trim(),
+    status:$('#kcStatus').value,
+    tags:splitTags($('#kcTags').value),
+    html:$('#kanbanRich').innerHTML,
+    checks:structuredClone(tasks),
+    plannedStartAt:$('#kcPlanned').value,
+    dueAt:$('#kcDue').value,
+    cardColor:$('#kcColor').value
+  });
+
+  if(tasks.length&&tasksAllDone(tasks)&&!t.completedAt){
+    if(!t.startedAt)t.startedAt=Date.now();
+    t.completedAt=Date.now();
+    t.status=state.kanbanColumns.find(c=>String(c.name).toUpperCase()==='DONE')?.id||'done';
+  }
+
+  if(!id)state.kanban.push(t);
+
+  const rule=state.kanbanRecurring?.find(r=>r.sourceCardId===t.id);
+  if(rule)rule.snapshot=recurringSnapshotFromCard(t);
+
+  await saveState();
+  closeDrawer();
+  renderKanban();
+}
+/* ======================= END V10.2 ======================= */

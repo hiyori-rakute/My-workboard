@@ -240,3 +240,10 @@ input,select,textarea{width:100%;border:1px solid var(--line);border-radius:11px
 /* V10.1 */
 .routine-task-icon.pending,.legend-routine-example.pending{color:#ec4899!important;}
 .routine-task-icon.complete,.legend-routine-example.complete{color:#a2a7b0!important;filter:grayscale(1);}
+
+/* V10.2 - child tasks always visible on Kanban card */
+.task-card .sub-list{display:flex;flex-direction:column;gap:5px;margin-top:10px}
+.task-card .sub-inline{min-height:24px}
+.task-card .nested-1{padding-left:16px!important}
+.task-card .nested-2{padding-left:32px!important}
+.task-card .nested-3{padding-left:48px!important}

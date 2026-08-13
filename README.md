@@ -1,16 +1,21 @@
-# My Workboard V8
+# My Workboard V9
 
-V8 专门修复富文本与多级子任务：
+V9 主要更新：
 
-- Memo 富文本里的 ↳＋ 可以正常添加下级子任务。
-- Kanban 已存在的旧次级子任务打开后会自动补上 ✕ 删除按钮。
-- 所有层级子任务都可删除；删除父任务时下级一起删除。
-- Template Library 的 Kanban / Project / Memo 富文本 ☑ 按钮可正常插入子任务。
-- 富文本工具栏统一改为紧凑图标：
-  B / U / 红色 A / 🖍 / • / → / ← / 🔗 / ☑ / 🖼
-- 字体颜色不再显示成小圆点，改为红色 A。
-- Kanban / Project / SOP / Memo / Templates 中凡是使用富文本的地方共用同一套工具栏。
-- 兼容 V1~V7 IndexedDB 数据。
+- Kanban / Project / SOP / Memo / Templates 富文本中的所有层级子任务支持 ↑ / ↓ 调整顺序。
+- Routine 普通子任务也支持 ↑ / ↓ 调整顺序。
+- Project 增加“预计开始”，适合先记录、以后再正式启动的工作。
+- Project 搜索框修复：输入时不再整页重绘，不会每输入一个字符就失焦。
+- 左侧主菜单支持拖拽调整顺序，并保存在 IndexedDB。
+- Execution History 收进 SOP 二级菜单；点 SOP 左侧三角展开/收起。
+- Today 页面重新布局：
+  1. 长期任务放在 Routine 上方。
+  2. 增加 Routine + Kanban 共用日历。
+  3. Routine 在当天日期旁显示状态圆点：
+     - 绿色：当天仍有 Routine 未完成
+     - 灰色：当天 Routine 已全部完成 / 休假 / N/A
+  4. Kanban 任务继续显示在日期格内。
+- 兼容 V1~V8 IndexedDB 数据。
 
-更新前请导出备份，覆盖 GitHub 的 index.html / style.css / db.js / app.js / README.md。
-部署后 Ctrl+F5，左上角应显示 Personal Work OS · V8。
+更新前先导出备份，然后覆盖 GitHub 根目录的 5 个文件。
+部署后 Ctrl+F5，左上角应显示 Personal Work OS · V9。

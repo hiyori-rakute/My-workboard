@@ -1313,3 +1313,253 @@ async function saveProjectTemplateEdit(id){
 }
 
 /* ================== END V8 RICH EDITOR FIXES ================== */
+
+
+/* ======================= V9 OVERRIDES ======================= */
+let projectFilterV9='';
+let sopMenuOpen = true;
+
+function migrateV9(){
+  state.navOrder ??= ['today','routine','projects','sopGroup','kanban','memo','templates','settings'];
+  (state.projects||[]).forEach(p=>{p.plannedStartAt??='';});
+  (state.routines||[]).forEach(r=>{r.subtasks??=[];});
+}
+async function loadState(){
+  await openDB();
+  state=await dbGet('state');
+  if(!state)state=structuredClone(DEFAULT);
+  migrate();migrateV5();migrateV6();migrateV7();migrateV9();
+  ensureRecurringKanban();
+  await saveState();
+}
+
+/* ---------- inline task ordering ---------- */
+function inlineTaskMarkup(t={}){
+  const id=t.id||uid(), title=esc(t.text||t.title||'新子任务'), due=esc(t.dueAt||''), st=t.startedAt||'', done=t.completedAt||'', checked=t.done||t.completedAt,children=t.children||[];
+  return `<div class="inline-task-wrap" data-wrapper-id="${id}">
+    <span class="inline-task" data-task-id="${id}" data-started="${st||''}" data-completed="${done||''}" data-due="${due}" contenteditable="false">
+      <button type="button" class="inline-start task-icon" title="Start" onclick="inlineTaskStart(this)">▶</button>
+      <input type="checkbox" ${checked?'checked':''} onchange="inlineTaskDone(this)">
+      <span class="inline-task-text" contenteditable="true">${title}</span>
+      <button type="button" class="task-icon" title="上移" onclick="moveInlineTask(this,-1)">↑</button>
+      <button type="button" class="task-icon" title="下移" onclick="moveInlineTask(this,1)">↓</button>
+      <button type="button" class="inline-due task-icon" title="预计完成时间" onclick="inlineTaskDue(this)">⏰</button>
+      <button type="button" class="inline-child task-icon" title="添加下级子任务" onclick="inlineTaskChild(this)">↳＋</button>
+      <button type="button" class="inline-delete task-icon danger-icon" title="删除这个子任务" onclick="removeInlineTask(this)">✕</button>
+      <span class="inline-task-meta">${st?fmtTime(Number(st)):'未开始'}${due?' · 预计 '+due.replace('T',' '):''}${done?' · 完成 '+fmtTime(Number(done)):''}</span>
+    </span>
+    <div class="inline-children">${children.map(inlineTaskMarkup).join('')}</div>
+  </div>`;
+}
+function moveInlineTask(btn,dir){
+  const wrap=btn.closest('.inline-task-wrap');if(!wrap)return;
+  const parent=wrap.parentElement;if(!parent)return;
+  if(dir<0){
+    let prev=wrap.previousElementSibling;
+    while(prev && !prev.classList.contains('inline-task-wrap')) prev=prev.previousElementSibling;
+    if(prev) parent.insertBefore(wrap,prev);
+  }else{
+    let next=wrap.nextElementSibling;
+    while(next && !next.classList.contains('inline-task-wrap')) next=next.nextElementSibling;
+    if(next) parent.insertBefore(next,wrap);
+  }
+}
+function upgradeRichEditorTasks(root){
+  if(!root)return;
+  root.querySelectorAll('.inline-task').forEach(task=>{
+    task.setAttribute('contenteditable','false');
+    const ensure=(cls,text,title,handler,beforeMeta=true)=>{
+      if(task.querySelector('.'+cls))return;
+      const b=document.createElement('button');b.type='button';b.className=`${cls} task-icon`;b.title=title;b.textContent=text;b.onclick=handler;
+      const meta=task.querySelector('.inline-task-meta');task.insertBefore(b,beforeMeta?(meta||null):null);
+    };
+    ensure('inline-up','↑','上移',function(){moveInlineTask(this,-1)});
+    ensure('inline-down','↓','下移',function(){moveInlineTask(this,1)});
+    if(!task.querySelector('.inline-child')){
+      const b=document.createElement('button');b.type='button';b.className='inline-child task-icon';b.title='添加下级子任务';b.textContent='↳＋';b.onclick=function(){inlineTaskChild(this)};
+      task.insertBefore(b,task.querySelector('.inline-task-meta')||null);
+    }
+    if(!task.querySelector('.inline-delete')){
+      const b=document.createElement('button');b.type='button';b.className='inline-delete task-icon danger-icon';b.title='删除这个子任务';b.textContent='✕';b.onclick=function(){removeInlineTask(this)};
+      task.insertBefore(b,task.querySelector('.inline-task-meta')||null);
+    }
+  });
+}
+
+/* ---------- Routine subtask ordering ---------- */
+function moveRoutineSub(btn,dir){
+  const row=btn.closest('.rsub'),parent=row?.parentElement;if(!row||!parent)return;
+  if(dir<0 && row.previousElementSibling)parent.insertBefore(row,row.previousElementSibling);
+  if(dir>0 && row.nextElementSibling)parent.insertBefore(row.nextElementSibling,row);
+}
+function routineSubEditRow(s){
+  return `<div class="item rsub" data-id="${s.id||uid()}">
+    <div class="rsub-order"><button class="icon-btn" title="上移" onclick="moveRoutineSub(this,-1)">↑</button><button class="icon-btn" title="下移" onclick="moveRoutineSub(this,1)">↓</button></div>
+    <input class="rsub-title" value="${esc(s.title||'')}">
+    <button class="danger-btn" onclick="this.closest('.rsub').remove()">删除</button>
+  </div>`;
+}
+function openRoutineModal(id){
+  const r=state.routines.find(x=>x.id===id)||{name:'',repeat:'weekdays',weekdays:[1,2,3,4,5],subtasks:[],tags:[]};
+  modal(`<h2>${id?'编辑':'新建'} Routine</h2>
+    <div class="form-row"><div class="form-field"><label>名称</label><input id="rName" value="${esc(r.name)}"></div><div class="form-field"><label>标签</label><input id="rTags" value="${esc((r.tags||[]).join(', '))}"></div></div>
+    <div class="form-field"><label>重复</label><select id="rRepeat"><option value="daily" ${r.repeat==='daily'?'selected':''}>每天</option><option value="weekdays" ${r.repeat==='weekdays'?'selected':''}>工作日</option><option value="custom" ${r.repeat==='custom'?'selected':''}>指定星期</option></select></div>
+    <div>${['日','一','二','三','四','五','六'].map((n,i)=>`<label class="checkbox-line"><input type="checkbox" class="rWeek" value="${i}" ${(r.weekdays||[]).includes(i)?'checked':''}>周${n}</label>`).join('')}</div>
+    <h3>子任务</h3><div id="rSubs">${(r.subtasks||[]).map(routineSubEditRow).join('')}</div>
+    <button class="small-btn" onclick="$('#rSubs').insertAdjacentHTML('beforeend',routineSubEditRow({id:uid(),title:''}))">＋子任务</button>
+    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRoutineV9('${id||''}')">保存</button></div>`);
+}
+async function saveRoutineV9(id){
+  const x={id:id||uid(),name:$('#rName').value.trim(),tags:splitTags($('#rTags').value),repeat:$('#rRepeat').value,weekdays:$$('.rWeek:checked').map(x=>+x.value),subtasks:$$('.rsub').map(e=>({id:e.dataset.id,title:e.querySelector('.rsub-title').value.trim()})).filter(x=>x.title)};
+  if(id)state.routines[state.routines.findIndex(r=>r.id===id)]=x;else state.routines.push(x);
+  await saveState();closeModal();renderAll();
+}
+
+/* ---------- Project planned start + filter fix ---------- */
+function filterProjectsVisible(v){
+  projectFilterV9=v||'';
+  const q=projectFilterV9.trim().toLowerCase();
+  document.querySelectorAll('#page-projects .project-filter-item').forEach(el=>{
+    el.style.display=!q||(el.dataset.search||'').includes(q)?'':'none';
+  });
+  document.querySelectorAll('#page-projects .category-card').forEach(cat=>{
+    const visible=[...cat.querySelectorAll('.project-filter-item')].some(el=>el.style.display!=='none');
+    const empty=cat.querySelector('.empty');
+    if(empty)empty.style.display=q&&visible?'none':'';
+  });
+}
+function projectSummary(p){
+  const tasks=p.subtasks||[],done=tasks.filter(x=>x.done||x.completedAt).length;
+  const search=((p.title||'')+' '+(p.tags||[]).join(' ')).toLowerCase();
+  return `<div class="item project-row project-filter-item" data-search="${esc(search)}">
+    <div class="card-topline"><input class="main-check" type="checkbox" ${p.completedAt?'checked':''} onchange="event.stopPropagation();finishProject('${p.id}',this.checked)">
+    <div class="card-body" onclick="openProject('${p.id}')"><div class="item-title">${esc(p.title)}</div>
+    <div class="item-meta">${p.plannedStartAt?`计划 ${esc(p.plannedStartAt.replace('T',' '))} · `:''}Start ${fmtTime(p.startedAt)} · Done ${fmtTime(p.completedAt)} · ${done}/${tasks.length} 子任务</div>
+    ${p.dueAt?`<div class="time-badge ${dueClass(p.dueAt)}">${dueText(p.dueAt)}</div>`:''}<div class="tags">${tagHtml(p.tags)}</div></div></div>
+    <div class="card-actions">${!p.startedAt?`<button class="small-btn" onclick="event.stopPropagation();startProject('${p.id}')">▶ Start</button>`:''}</div>
+    ${tasks.length?`<div class="sub-list">${tasks.map(s=>`<div class="sub-inline"><input type="checkbox" ${s.done||s.completedAt?'checked':''} onchange="toggleProjectSub('${p.id}','${s.id}',this.checked)"><span>${esc(s.text||s.title)}</span>${!s.startedAt?`<button class="small-btn" onclick="startProjectSub('${p.id}','${s.id}')">Start</button>`:`<span class="time-badge">${fmtTime(s.startedAt)}→${fmtTime(s.completedAt)}</span>`}${s.dueAt?`<span class="time-badge ${dueClass(s.dueAt)}">${dueText(s.dueAt)}</span>`:''}</div>`).join('')}</div>`:''}
+  </div>`;
+}
+function renderProjects(){
+  const cats=state.projectCategories;
+  $('#page-projects').innerHTML=`<div class="section-title"><h2>长期任务 / Projects</h2><div><button class="ghost-btn" onclick="openCategoryModal()">＋ 分类</button> <button class="primary-btn" onclick="openProjectCreate()">＋ 新建项目</button></div></div>
+    <div class="filterbar"><input id="projectFilterInputV9" placeholder="搜索标题 / 标签" value="${esc(projectFilterV9)}" oninput="filterProjectsVisible(this.value)"></div>
+    ${cats.map(c=>{const ps=state.projects.filter(p=>p.categoryId===c.id);return `<div class="card category-card" style="margin-bottom:16px"><div class="section-title"><h2>${esc(c.name)}</h2><button class="small-btn" onclick="openCategoryModal('${c.id}')">编辑分类</button></div>${ps.map(projectSummary).join('')||'<div class="empty">这个分类还没有项目</div>'}</div>`}).join('')}
+    <div class="card category-card"><div class="section-title"><h2>未分类</h2></div>${state.projects.filter(p=>!p.categoryId).map(projectSummary).join('')||'<div class="empty">无</div>'}</div>`;
+  setTimeout(()=>filterProjectsVisible(projectFilterV9),0);
+}
+function openProject(id){
+  const p=state.projects.find(x=>x.id===id);if(!p)return;
+  drawer(`<div class="drawer-head"><div><h2 style="margin:0">${esc(p.title)}</h2><div class="item-meta">实际开始 ${fmtTime(p.startedAt)} · 实际完成 ${fmtTime(p.completedAt)}</div><div class="tags">${tagHtml(p.tags)}</div></div><button class="ghost-btn" onclick="closeDrawer()">✕</button></div>
+    <div class="mini-actions" style="margin-top:10px">${!p.startedAt?`<button class="icon-btn" title="Start 主任务" onclick="startProject('${p.id}')">▶</button>`:''}<button class="icon-btn" title="完成主任务" onclick="finishProject('${p.id}',true)">✓</button><button class="icon-btn" title="保存为模板" onclick="saveProjectAsTemplate('${p.id}')">☆</button></div>
+    <div class="detail-grid"><div class="form-field"><label>标题</label><input id="pdTitle" value="${esc(p.title)}"></div><div class="form-field"><label>分类</label><select id="pdCat"><option value="">未分类</option>${state.projectCategories.map(c=>`<option value="${c.id}" ${p.categoryId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div></div>
+    <div class="detail-grid compact-fields"><div class="form-field"><label>预计开始</label><input type="datetime-local" id="pdPlanned" value="${esc(p.plannedStartAt||'')}"></div><div class="form-field"><label>预计完成</label><input type="datetime-local" id="pdDue" value="${esc(p.dueAt||'')}"></div></div>
+    <div class="detail-grid compact-fields"><div class="form-field"><label>状态</label><select id="pdStatus"><option value="todo" ${p.status==='todo'?'selected':''}>TODO</option><option value="doing" ${p.status==='doing'?'selected':''}>DOING</option><option value="waiting" ${p.status==='waiting'?'selected':''}>WAITING</option><option value="done" ${p.status==='done'?'selected':''}>DONE</option></select></div><div class="form-field"><label>标签</label><input id="pdTags" value="${esc((p.tags||[]).join(', '))}"></div></div>
+    <h3>项目 Memo / 任务层级</h3>${richEditor('projectRich',mergeTasksIntoHtml(p.html,p.subtasks||[]),'可在任意位置插任务，并用 ↑ ↓ 调整顺序…')}
+    <div id="projectDrop" class="drop-zone">Ctrl+V 或拖图片</div>${richNoteSection('交接 / 对接人员','handoffs',p)}${richNoteSection('汇报记录','reports',p)}${richNoteSection('被提出的问题','questions',p)}${richNoteSection('需要调查的地方','investigations',p)}
+    <div class="modal-actions"><button class="danger-btn" onclick="deleteProject('${p.id}')">删除项目</button><button class="primary-btn" onclick="saveProjectDrawerV9('${p.id}')">保存</button></div>`);
+  wireImageDrop('projectDrop','projectRich');['handoffs','reports','questions','investigations'].forEach(k=>(p[k]||[]).forEach(n=>wireImageDrop(`${k}Drop_${n.id}`,`${k}Rich_${n.id}`)));
+}
+async function saveProjectDrawerV9(id){
+  const p=state.projects.find(x=>x.id===id);
+  const tasks=collectInlineTasks('projectRich').map(x=>({...x,title:x.text,note:''}));
+  Object.assign(p,{title:$('#pdTitle').value.trim(),categoryId:$('#pdCat').value,plannedStartAt:$('#pdPlanned').value,dueAt:$('#pdDue').value,status:$('#pdStatus').value,tags:splitTags($('#pdTags').value),html:$('#projectRich').innerHTML,subtasks:tasks,handoffs:collectRichNotes('handoffs'),reports:collectRichNotes('reports'),questions:collectRichNotes('questions'),investigations:collectRichNotes('investigations')});
+  if(p.subtasks.length&&p.subtasks.every(x=>x.done||x.completedAt)&&!p.completedAt){if(!p.startedAt)p.startedAt=Date.now();p.completedAt=Date.now();p.status='done'}
+  await saveState();closeDrawer();renderProjects();toast('项目已保存');
+}
+
+/* ---------- Sidebar draggable order + SOP submenu ---------- */
+function buildSidebarV9(){
+  const nav=document.getElementById('nav');if(!nav)return;
+  const existing={};
+  nav.querySelectorAll('.nav-item').forEach(b=>existing[b.dataset.page]=b);
+  const makeButton=(page,label)=>existing[page]||Object.assign(document.createElement('button'),{className:'nav-item',textContent:label});
+  const labels={today:'🏠 Today',routine:'🔁 Routine',projects:'🗂 Projects',kanban:'📊 Kanban',memo:'📝 Memo',templates:'🧩 Templates',settings:'⚙ Settings'};
+  nav.innerHTML='';
+  const nodes={};
+  Object.keys(labels).forEach(page=>{
+    const b=makeButton(page,labels[page]);b.dataset.page=page;b.textContent=labels[page];b.onclick=()=>goPage(page);
+    nodes[page]=b;
+  });
+  const sopWrap=document.createElement('div');sopWrap.className='nav-group';sopWrap.dataset.navkey='sopGroup';sopWrap.draggable=true;
+  sopWrap.innerHTML=`<div class="nav-group-head"><button class="nav-arrow" title="展开/收起">▾</button><button class="nav-item nav-sop-main" data-page="sop">📚 SOP</button></div><div class="nav-sub ${sopMenuOpen?'open':''}"><button class="nav-item nav-sub-item" data-page="history">📜 Execution History</button></div>`;
+  sopWrap.querySelector('.nav-arrow').onclick=e=>{e.stopPropagation();sopMenuOpen=!sopMenuOpen;sopWrap.querySelector('.nav-sub').classList.toggle('open',sopMenuOpen);sopWrap.querySelector('.nav-arrow').textContent=sopMenuOpen?'▾':'▸'};
+  sopWrap.querySelector('[data-page=sop]').onclick=()=>goPage('sop');
+  sopWrap.querySelector('[data-page=history]').onclick=()=>goPage('history');
+  nodes.sopGroup=sopWrap;
+
+  for(const key of state.navOrder||[]) if(nodes[key])nav.appendChild(nodes[key]);
+  for(const [key,node] of Object.entries(nodes)) if(!nav.contains(node))nav.appendChild(node);
+
+  [...nav.children].forEach(el=>{
+    const key=el.dataset.navkey||el.dataset.page;if(!key)return;
+    el.draggable=true;el.dataset.navkey=key;
+    el.ondragstart=e=>{e.dataTransfer.setData('text/navkey',key);el.classList.add('dragging-nav')};
+    el.ondragend=()=>el.classList.remove('dragging-nav');
+    el.ondragover=e=>e.preventDefault();
+    el.ondrop=async e=>{
+      e.preventDefault();const from=e.dataTransfer.getData('text/navkey'),to=key;if(!from||from===to)return;
+      let arr=[...(state.navOrder||[])].filter(x=>x!==from);const idx=arr.indexOf(to);arr.splice(idx<0?arr.length:idx,0,from);state.navOrder=arr;await saveState();buildSidebarV9();
+    };
+  });
+}
+const __v9DOMContentLoadedFlag=true;
+
+/* keep active styling in nested menu */
+function goPage(n){
+  $$('.page').forEach(x=>x.classList.remove('active'));const page=$(`#page-${n}`);if(page)page.classList.add('active');
+  $$('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.page===n));
+  $('#pageTitle').textContent=({today:'Today',routine:'Routine',projects:'Projects',sop:'SOP',history:'Execution History',kanban:'Kanban',memo:'Memo',templates:'Templates',settings:'Settings'})[n]||n;
+  renderPage(n);
+}
+
+/* ---------- Combined Today calendar: Routine + Kanban ---------- */
+function routineCalendarStatus(dateStr){
+  const due=state.routines.filter(r=>isRoutineDue(r,dateStr));
+  if(!due.length)return null;
+  const complete=due.every(r=>{
+    const st=getRLog(dateStr,r.id)?.status;
+    return st==='done'||st==='leave'||st==='na';
+  });
+  return {count:due.length,complete};
+}
+function todayCombinedCalendarItems(){
+  return kanbanCalendarItems();
+}
+function combinedCalendar(monthKey,onShiftName){
+  const [y,m]=monthKey.split('-').map(Number),first=new Date(y,m-1,1),last=new Date(y,m,0),start=first.getDay(),items=todayCombinedCalendarItems();
+  let cells=['日','一','二','三','四','五','六'].map(x=>`<div class="cal-week">${x}</div>`);
+  for(let i=0;i<start;i++)cells.push('<div class="cal-day blank"></div>');
+  for(let day=1;day<=last.getDate();day++){
+    const ds=`${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const rs=routineCalendarStatus(ds);
+    let hits=items.filter(x=>x.date&&x.date.toISOString().slice(0,10)===ds).sort((a,b)=>Number(a.done)-Number(b.done));
+    const events=hits.map(h=>`<button class="cal-event ${h.done?'done':''}" title="${esc(h.title)}" onclick="openKanbanCard('${h.id}')">${h.done?'✓ ':''}${esc(h.title)}</button>`).join('');
+    const rIcon=rs?`<span class="routine-day-icon ${rs.complete?'complete':'pending'}" title="${rs.count} 个 Routine">${rs.complete?'●':'●'}</span>`:'';
+    cells.push(`<div class="cal-day ${ds===todayISO()?'today':''}"><div class="cal-num-row"><span class="cal-num">${day}</span>${rIcon}</div><div class="cal-events-scroll">${events}</div></div>`);
+  }
+  return `<div class="calendar-card"><div class="cal-head"><button class="micro-btn" onclick="${onShiftName}(-1)">‹</button><b>${y}年${m}月</b><button class="micro-btn" onclick="${onShiftName}(1)">›</button></div><div class="calendar-v5">${cells.join('')}</div><div class="calendar-legend"><span><i class="legend-dot green"></i> Routine 未完成</span><span><i class="legend-dot gray"></i> Routine 已完成/休假/N/A</span></div></div>`;
+}
+function renderToday(){
+  ensureRecurringKanban();
+  const d=todayISO(),rs=state.routines.filter(r=>isRoutineDue(r,d)),done=rs.filter(r=>getRLog(d,r.id)?.status==='done').length;
+  const activeP=state.projects.filter(p=>p.status!=='done'&&!p.completedAt);
+  const activeK=state.kanban.filter(x=>!x.completedAt&&!x.archived&&String(columnForCard(x)?.name||x.status).toUpperCase()!=='DONE');
+  const recentProjects=[...state.projects].sort((a,b)=>(b.createdAt||b.startedAt||0)-(a.createdAt||a.startedAt||0)).slice(0,6);
+  $('#page-today').innerHTML=`<div class="grid grid-3">
+    <button class="card kpi-link" onclick="goPage('routine')"><div class="kpi">${done}/${rs.length}</div><div class="kpi-label">今日 Routine →</div></button>
+    <button class="card kpi-link" onclick="goPage('projects')"><div class="kpi">${activeP.length}</div><div class="kpi-label">长期任务 / Projects →</div></button>
+    <button class="card kpi-link" onclick="goPage('kanban')"><div class="kpi">${activeK.length}</div><div class="kpi-label">Kanban 未完成 →</div></button>
+  </div>
+  <div class="card" style="margin-top:18px"><div class="section-title"><h2>🗂 长期任务</h2><button class="small-btn" onclick="goPage('projects')">全部</button></div>${recentProjects.map(projectSummary).join('')||'<div class="empty">还没有长期任务</div>'}</div>
+  <div class="card" style="margin-top:18px"><div class="section-title"><h2>📅 Routine + Kanban 日历</h2><span class="muted">Routine 状态用日期旁的小圆点表示；Kanban 任务显示在日期格内</span></div>${combinedCalendar(todayCalMonth,'todayCalendarShift')}</div>
+  <div class="grid grid-2" style="margin-top:18px">
+    <div class="card"><div class="section-title"><h2>今日 Routine</h2><button class="small-btn" onclick="goPage('routine')">历史</button></div>${rs.map(r=>routineItem(r,d)).join('')}</div>
+    <div class="card"><div class="section-title"><h2>📊 Kanban</h2><button class="small-btn" onclick="goPage('kanban')">打开看板</button></div><div class="today-column-groups">${state.kanbanColumns.map(todayColumnGroup).join('')}</div></div>
+  </div>
+  <div style="margin-top:18px">${tagSearchModule()}</div>`;
+}
+
+/* ---------- init sidebar after app startup ---------- */
+window.addEventListener('load',()=>setTimeout(buildSidebarV9,50));
+/* ======================= END V9 OVERRIDES ======================= */

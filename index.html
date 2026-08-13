@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>My Workboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">W</div>
+        <div>
+          <div class="brand-title">My Workboard</div>
+          <div class="brand-sub">Personal Work OS</div>
+        </div>
+      </div>
+
+      <nav id="nav">
+        <button class="nav-item active" data-page="today">🏠 Today</button>
+        <button class="nav-item" data-page="routine">🔁 Routine</button>
+        <button class="nav-item" data-page="sop">📚 SOP</button>
+        <button class="nav-item" data-page="history">📜 Execution History</button>
+        <button class="nav-item" data-page="kanban">📊 Kanban</button>
+        <button class="nav-item" data-page="memo">📝 Memo</button>
+        <button class="nav-item" data-page="settings">⚙ Settings</button>
+      </nav>
+
+      <div class="sidebar-note">
+        数据保存在当前浏览器 IndexedDB。<br/>
+        建议定期导出备份。
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="pageTitle">Today</h1>
+          <div id="todayText" class="muted"></div>
+        </div>
+        <div class="top-actions">
+          <button class="ghost-btn" id="quickBackupBtn">💾 导出备份</button>
+        </div>
+      </header>
+
+      <section id="page-today" class="page active"></section>
+      <section id="page-routine" class="page"></section>
+      <section id="page-sop" class="page"></section>
+      <section id="page-history" class="page"></section>
+      <section id="page-kanban" class="page"></section>
+      <section id="page-memo" class="page"></section>
+      <section id="page-settings" class="page"></section>
+    </main>
+  </div>
+
+  <div id="modalRoot"></div>
+  <div id="toastRoot"></div>
+
+  <script src="db.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

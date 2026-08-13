@@ -319,3 +319,25 @@ input,select,textarea{width:100%;border:1px solid var(--line);border-radius:11px
   margin:8px 0;
   border-radius:8px;
 }
+
+/* V10.7 */
+.drag-active-v107{
+  background:rgba(96,110,230,.06)!important;
+  border-color:#7d88eb!important;
+}
+.rich-editor .inline-rich-image,
+.rich-editor img{
+  display:block;
+  max-width:min(100%,900px);
+  height:auto;
+  margin:8px 0;
+  border-radius:8px;
+}
+.legacy-images-v107{
+  margin-top:12px;
+  color:var(--muted);
+  font-size:12px;
+}
+.legacy-images-v107 .memo-images{
+  margin-top:8px;
+}

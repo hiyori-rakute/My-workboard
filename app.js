@@ -2741,3 +2741,175 @@ function cleanRichEditorBlankLinesV104(editor){
 }
 
 /* ======================= END V10.6 ======================= */
+
+
+/* ======================= V10.7 UNIFIED INLINE IMAGE FIX ======================= */
+
+/* Remember last caret inside each rich editor so toolbar/drop insertions go
+   where the user was working instead of jumping to the end. */
+const richCaretV107 = new Map();
+
+document.addEventListener('selectionchange',()=>{
+  const sel=window.getSelection();
+  if(!sel || !sel.rangeCount)return;
+  const node=sel.anchorNode;
+  const el=node?.nodeType===1?node:node?.parentElement;
+  const ed=el?.closest?.('.rich-editor');
+  if(!ed?.id)return;
+  try{
+    richCaretV107.set(ed.id,sel.getRangeAt(0).cloneRange());
+  }catch{}
+});
+
+function restoreRichCaretV107(ed){
+  if(!ed)return false;
+  const saved=richCaretV107.get(ed.id);
+  if(!saved)return false;
+  try{
+    if(!ed.contains(saved.commonAncestorContainer))return false;
+    const sel=window.getSelection();
+    sel.removeAllRanges();sel.addRange(saved);
+    return true;
+  }catch{return false}
+}
+
+function insertInlineImageNodeV107(editorId,data){
+  const ed=document.getElementById(editorId);
+  if(!ed)return;
+
+  ensureFlowLinesV106(ed);
+  ed.focus();
+  restoreRichCaretV107(ed);
+
+  const img=document.createElement('img');
+  img.src=data;
+  img.alt='image';
+  img.className='inline-rich-image';
+
+  const sel=window.getSelection();
+  if(sel && sel.rangeCount && ed.contains(sel.anchorNode)){
+    const range=sel.getRangeAt(0);
+    range.deleteContents();
+    range.insertNode(img);
+
+    const lineBreak=document.createElement('br');
+    img.after(lineBreak);
+
+    try{
+      range.setStartAfter(lineBreak);
+      range.collapse(true);
+      sel.removeAllRanges();sel.addRange(range);
+      richCaretV107.set(editorId,range.cloneRange());
+    }catch{}
+  }else{
+    let line=[...ed.children].reverse().find(x=>x.classList?.contains('rich-flow-line'));
+    if(!line){
+      line=makeEditableFlowLineV106();
+      ed.appendChild(line);
+    }
+    if(line.innerHTML==='<br>')line.innerHTML='';
+    line.appendChild(img);
+    line.appendChild(document.createElement('br'));
+    setCaretInFlowLineV106(line,true);
+  }
+
+  ensureFlowLinesV106(ed);
+}
+
+/* Override old helper too, so toolbar image selection uses the same path. */
+function insertImageAtCaret(id,data){
+  insertInlineImageNodeV107(id,data);
+}
+
+/* ONE image wiring path only.
+   IMPORTANT: no ed.onpaste here anymore.
+   Paste is handled only by the single global handler below.
+   Also ignore the historical callback so Memo no longer pushes the same image
+   into m.images and re-renders the whole page. */
+function wireImageDrop(zoneId,editorId,callback){
+  const zone=zoneId?document.getElementById(zoneId):null;
+  const ed=document.getElementById(editorId);
+  if(!ed)return;
+
+  /* Explicitly remove any old DOM0 paste handler left by earlier versions. */
+  ed.onpaste=null;
+
+  if(zone){
+    zone.ondragover=e=>{
+      e.preventDefault();
+      zone.classList.add('drag-active-v107');
+    };
+    zone.ondragleave=()=>zone.classList.remove('drag-active-v107');
+    zone.ondrop=e=>{
+      e.preventDefault();
+      zone.classList.remove('drag-active-v107');
+      const files=[...e.dataTransfer.files].filter(f=>f?.type?.startsWith('image/'));
+      if(!files.length)return;
+      filesToData(files,im=>insertInlineImageNodeV107(editorId,im.data));
+    };
+  }
+
+  /* Dropping directly onto the editor also inserts inline. */
+  ed.ondragover=e=>e.preventDefault();
+  ed.ondrop=e=>{
+    e.preventDefault();
+    const files=[...e.dataTransfer.files].filter(f=>f?.type?.startsWith('image/'));
+    if(!files.length)return;
+    filesToData(files,im=>insertInlineImageNodeV107(editorId,im.data));
+  };
+}
+
+/* Replace V10.6 global paste path with a single guarded handler.
+   stopImmediatePropagation prevents any older paste listener on document/editor
+   from processing the same clipboard image again. */
+document.addEventListener('paste',e=>{
+  const ed=e.target.closest?.('.rich-editor');
+  if(!ed)return;
+
+  const items=[...(e.clipboardData?.items||[])];
+  const images=items.filter(i=>i.type?.startsWith('image/'));
+  if(!images.length)return;
+
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+
+  images.forEach(item=>{
+    const file=item.getAsFile();
+    if(!file)return;
+    const reader=new FileReader();
+    reader.onload=()=>insertInlineImageNodeV107(ed.id,reader.result);
+    reader.readAsDataURL(file);
+  });
+},true);
+
+/* Memo now treats rich-content images as part of memoRich only.
+   Old historical m.images are still displayed so existing data is not lost,
+   but newly pasted/dropped images no longer enter that separate array. */
+function renderMemo(){
+  if(!activeMemoId&&state.memos[0])activeMemoId=state.memos[0].id;
+  const list=state.memos.filter(x=>!memoFilter||x.title.toLowerCase().includes(memoFilter.toLowerCase())||(x.tags||[]).some(t=>t.toLowerCase().includes(memoFilter.toLowerCase())));
+  const m=state.memos.find(x=>x.id===activeMemoId);
+
+  $('#page-memo').innerHTML=`<div class="grid memo-layout">
+    <div class="card memo-list-panel"><div class="section-title"><h2>Memos</h2><button class="small-btn" onclick="newMemo()">＋</button></div>
+      <input id="memoFilterInput" placeholder="标题 / 标签筛选" value="${esc(memoFilter)}" oninput="filterMemoList(this.value)">
+      <div id="memoListItems" class="list" style="margin-top:12px">${list.map(x=>`<button class="item memo-list-item ${x.id===activeMemoId?'selected':''}" data-search="${esc((x.title+' '+(x.tags||[]).join(' ')).toLowerCase())}" onclick="activeMemoId='${x.id}';renderMemo()"><div class="item-title">${esc(x.title)}</div><div class="tags">${tagHtml(x.tags)}</div><div class="item-meta">${new Date(x.updatedAt||Date.now()).toLocaleString()}</div></button>`).join('')||'<div class="empty">还没有 Memo</div>'}</div>
+    </div>
+    <div class="card memo-editor-panel">${m?memoEditorV107(m):'<div class="empty">点击左边 Memo，或新建一个 Memo</div>'}</div>
+  </div>`;
+
+  if(m)wireImageDrop('memoDrop','memoRich');
+  setTimeout(hydrateAllRichEditors,0);
+}
+
+function memoEditorV107(m){
+  return `<div class="form-row"><input id="memoTitle" value="${esc(m.title)}"><input id="memoTags" placeholder="标签" value="${esc((m.tags||[]).join(', '))}"></div>
+    <h3>内容</h3>
+    ${richEditor('memoRich',m.html||'','文字、子任务、图片、链接可自由混排…')}
+    <div id="memoDrop" class="drop-zone">Ctrl+V 直接粘贴到上面的内容框，或拖图片到这里</div>
+    ${(m.images||[]).length?`<details class="legacy-images-v107"><summary>旧版本独立图片 (${m.images.length})</summary>${imageGrid(m.images,'memo',m.id)}</details>`:''}
+    <div class="modal-actions"><button class="ghost-btn" onclick="saveMemoAsTemplate('${m.id}')">☆ 保存为模板</button><button class="danger-btn" onclick="deleteMemo('${m.id}')">删除 Memo</button><button class="primary-btn" onclick="saveMemoV7('${m.id}')">保存</button></div>`;
+}
+
+/* ======================= END V10.7 ======================= */

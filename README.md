@@ -1,18 +1,14 @@
-# My Workboard V10.6
+# My Workboard V10.7
 
-重点修复富文本任务块之后无法继续编辑的问题。
+图片处理修复：
 
-适用于：
-- Kanban Memo
-- Project 富文本
-- SOP 步骤
-- Memo
-- Template Library 富文本
-
-现在：
-- 每个一级子任务后都会自动存在一个真正 `contenteditable=true` 的普通文本行。
-- 插入子任务后，光标自动进入下一行，可马上继续打字。
-- 子任务后可直接 Ctrl+V 粘贴截图。
-- 可以自由组合：文字 → 子任务 → 文字 → 图片 → 子任务 → 备注。
-- 打开旧卡片时也自动补齐可输入行。
-- 在子任务名称中按 Enter，会跳到该任务后的普通文字区。
+- 修复 Ctrl+V 一次却插入两张相同图片。
+  原因：旧 wireImageDrop paste handler + V10.6 全局 paste handler 同时执行。
+- 现在所有富文本只保留一套图片粘贴逻辑。
+- Kanban / Project / SOP / Memo / Templates：
+  Ctrl+V 图片只插入一次，并插在当前富文本光标位置。
+- 拖拽图片到编辑器或下方 Drop Zone，也只插入富文本，不另存第二份。
+- 修复 Memo：
+  粘贴图片不再触发 renderMemo，不会清空尚未保存的文字/子任务。
+  图片直接留在“内容”富文本框中的当前位置。
+- 旧版本已经存在于 m.images 的独立图片不会丢失，暂时折叠显示为“旧版本独立图片”。

@@ -281,3 +281,41 @@ input,select,textarea{width:100%;border:1px solid var(--line);border-radius:11px
 .inline-children{
   margin-left:30px;
 }
+
+/* V10.5 */
+.rich-free-line{
+  min-height:22px;
+  padding:2px 1px;
+  outline:none;
+}
+.rich-free-line:empty::before{
+  content:'';
+}
+.rich-editor{
+  cursor:text;
+}
+
+/* V10.6 */
+.rich-flow-line{
+  display:block;
+  min-height:28px;
+  padding:4px 6px;
+  margin:2px 0;
+  border-radius:6px;
+  outline:none;
+  cursor:text;
+}
+.rich-flow-line:hover{
+  background:rgba(90,105,140,.035);
+}
+.rich-flow-line:focus{
+  background:rgba(90,105,140,.055);
+}
+.inline-rich-image{
+  display:block;
+  max-width:100%;
+  max-height:520px;
+  object-fit:contain;
+  margin:8px 0;
+  border-radius:8px;
+}

@@ -2382,3 +2382,362 @@ document.addEventListener('focusout',e=>{
 },true);
 
 /* ======================= END V10.4 ======================= */
+
+
+/* ======================= V10.5 RICH EDITOR CONTINUE-TYPING FIX ======================= */
+
+function makeEditableTailV105(){
+  const div=document.createElement('div');
+  div.className='rich-free-line';
+  div.innerHTML='<br>';
+  return div;
+}
+
+function setCaretInsideV105(el){
+  if(!el)return;
+  const range=document.createRange(),sel=window.getSelection();
+  range.selectNodeContents(el);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  el.closest('.rich-editor')?.focus();
+}
+
+/* Make sure an editor never ends directly on a task block.
+   Old saved cards are upgraded on open as well. */
+function ensureRichEditableTailV105(editor){
+  if(!editor)return;
+  const last=editor.lastElementChild;
+  if(!last){
+    editor.appendChild(makeEditableTailV105());
+    return;
+  }
+  if(last.classList?.contains('inline-task-wrap') || last.classList?.contains('inline-task')){
+    editor.appendChild(makeEditableTailV105());
+  }
+}
+
+/* Insert a top-level task and ALWAYS create a normal editable line after it. */
+function insertInlineCheckbox(id){
+  const ed=document.getElementById(id);
+  if(!ed){toast('当前编辑框还没有准备好');return;}
+
+  const holder=document.createElement('div');
+  holder.innerHTML=inlineTaskMarkup({id:uid(),text:'新子任务',children:[]});
+  const task=holder.firstElementChild;
+  const tail=makeEditableTailV105();
+
+  ed.focus();
+  const sel=window.getSelection();
+
+  if(sel && sel.rangeCount && ed.contains(sel.anchorNode)){
+    const range=sel.getRangeAt(0);
+    range.deleteContents();
+
+    /* If caret is inside an ordinary text block, insert after the current line
+       rather than splitting a task node. */
+    let block=sel.anchorNode.nodeType===1?sel.anchorNode:sel.anchorNode.parentElement;
+    while(block && block.parentElement!==ed && !block.classList?.contains('inline-task-wrap')){
+      block=block.parentElement;
+    }
+
+    if(block && block.parentElement===ed && !block.classList?.contains('inline-task-wrap')){
+      block.insertAdjacentElement('afterend',task);
+      task.insertAdjacentElement('afterend',tail);
+    }else{
+      const frag=document.createDocumentFragment();
+      frag.appendChild(task);
+      frag.appendChild(tail);
+      range.insertNode(frag);
+    }
+  }else{
+    ed.appendChild(task);
+    ed.appendChild(tail);
+  }
+
+  upgradeRichEditorTasks(ed);
+  setCaretInsideV105(tail);
+}
+
+/* Clicking unused space at the bottom of a rich editor puts the caret in a
+   normal text line instead of trapping focus on the last task. */
+document.addEventListener('mousedown',e=>{
+  const ed=e.target.closest?.('.rich-editor');
+  if(!ed)return;
+  if(e.target!==ed)return;
+  ensureRichEditableTailV105(ed);
+},true);
+
+document.addEventListener('click',e=>{
+  const ed=e.target.closest?.('.rich-editor');
+  if(!ed || e.target!==ed)return;
+  ensureRichEditableTailV105(ed);
+  const tail=ed.lastElementChild;
+  if(tail?.classList?.contains('rich-free-line'))setCaretInsideV105(tail);
+},true);
+
+/* When Enter is pressed while editing a task title, jump to a normal line
+   below that top-level task instead of creating malformed content inside it. */
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Enter')return;
+  const text=e.target.closest?.('.inline-task-text');
+  if(!text)return;
+  e.preventDefault();
+
+  const wrap=text.closest('.inline-task-wrap');
+  const editor=text.closest('.rich-editor');
+  if(!wrap||!editor)return;
+
+  /* For a nested task, add the free line after its top-level ancestor so
+     ordinary notes stay in the main Memo flow. */
+  let top=wrap;
+  while(top.parentElement?.closest?.('.inline-task-wrap')){
+    const parent=top.parentElement.closest('.inline-task-wrap');
+    if(!parent)break;
+    top=parent;
+  }
+
+  let next=top.nextElementSibling;
+  if(!next || !next.classList?.contains('rich-free-line')){
+    next=makeEditableTailV105();
+    top.insertAdjacentElement('afterend',next);
+  }
+  setCaretInsideV105(next);
+},true);
+
+/* Old cards / Project / SOP / Memo / Templates all get an editable tail. */
+function hydrateAllRichEditors(){
+  document.querySelectorAll('.rich-editor').forEach(ed=>{
+    upgradeRichEditorTasks(ed);
+    ensureRichEditableTailV105(ed);
+  });
+}
+
+/* Blank-line cleaner must preserve the final typing line while editing.
+   We only strip redundant empty rows on save and then leave one tail. */
+function cleanRichEditorBlankLinesV104(editor){
+  if(!editor)return;
+  const empties=[...editor.children].filter(ch=>isEmptyRichBlockV104(ch));
+  empties.forEach((ch,i)=>{
+    const isLast=ch===editor.lastElementChild;
+    if(!isLast)ch.remove();
+  });
+  ensureRichEditableTailV105(editor);
+}
+
+/* ======================= END V10.5 ======================= */
+
+
+/* ======================= V10.6 RICH FLOW FIX ======================= */
+
+function makeEditableFlowLineV106(){
+  const line=document.createElement('div');
+  line.className='rich-flow-line';
+  line.setAttribute('contenteditable','true');
+  line.innerHTML='<br>';
+  return line;
+}
+
+function isTaskWrapV106(el){
+  return !!el?.classList?.contains('inline-task-wrap');
+}
+
+function isFlowLineV106(el){
+  return !!el?.classList?.contains('rich-flow-line');
+}
+
+/* Every top-level task gets an ordinary editable line immediately after it.
+   This makes the editor behave like:
+   text -> task -> text -> image -> task -> text
+   instead of letting the contenteditable=false task trap the caret. */
+function ensureFlowLinesV106(editor){
+  if(!editor)return;
+
+  const children=[...editor.children];
+  for(const el of children){
+    if(!isTaskWrapV106(el))continue;
+
+    const next=el.nextElementSibling;
+    if(!isFlowLineV106(next)){
+      el.insertAdjacentElement('afterend',makeEditableFlowLineV106());
+    }else{
+      next.setAttribute('contenteditable','true');
+    }
+  }
+
+  if(!editor.lastElementChild || isTaskWrapV106(editor.lastElementChild)){
+    editor.appendChild(makeEditableFlowLineV106());
+  }
+
+  /* Convert V10.5 tail lines to the new explicit editable flow line. */
+  editor.querySelectorAll(':scope > .rich-free-line').forEach(old=>{
+    old.classList.remove('rich-free-line');
+    old.classList.add('rich-flow-line');
+    old.setAttribute('contenteditable','true');
+    if(!old.innerHTML.trim())old.innerHTML='<br>';
+  });
+}
+
+function setCaretInFlowLineV106(line,atEnd=false){
+  if(!line)return;
+  line.setAttribute('contenteditable','true');
+  const range=document.createRange(),sel=window.getSelection();
+  range.selectNodeContents(line);
+  range.collapse(!atEnd);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  line.focus?.();
+  line.closest('.rich-editor')?.focus();
+}
+
+/* Insert top-level task and leave the caret in a guaranteed editable row. */
+function insertInlineCheckbox(id){
+  const ed=document.getElementById(id);
+  if(!ed){toast('当前编辑框还没有准备好');return;}
+
+  ensureFlowLinesV106(ed);
+
+  const holder=document.createElement('div');
+  holder.innerHTML=inlineTaskMarkup({id:uid(),text:'新子任务',children:[]});
+  const task=holder.firstElementChild;
+  const line=makeEditableFlowLineV106();
+
+  const sel=window.getSelection();
+  let inserted=false;
+
+  if(sel && sel.rangeCount && ed.contains(sel.anchorNode)){
+    let block=sel.anchorNode.nodeType===1?sel.anchorNode:sel.anchorNode.parentElement;
+    while(block && block.parentElement!==ed && !block.classList?.contains('inline-task-wrap')){
+      block=block.parentElement;
+    }
+
+    if(block && block.parentElement===ed){
+      if(isTaskWrapV106(block)){
+        block.insertAdjacentElement('afterend',task);
+        task.insertAdjacentElement('afterend',line);
+      }else{
+        block.insertAdjacentElement('afterend',task);
+        task.insertAdjacentElement('afterend',line);
+      }
+      inserted=true;
+    }
+  }
+
+  if(!inserted){
+    ed.appendChild(task);
+    ed.appendChild(line);
+  }
+
+  upgradeRichEditorTasks(ed);
+  ensureFlowLinesV106(ed);
+  setCaretInFlowLineV106(line);
+}
+
+/* Clicking the blank area below/around task blocks always gives a writable row. */
+document.addEventListener('click',e=>{
+  const ed=e.target.closest?.('.rich-editor');
+  if(!ed)return;
+
+  ensureFlowLinesV106(ed);
+
+  if(e.target===ed){
+    const line=[...ed.children].reverse().find(x=>isFlowLineV106(x));
+    if(line)setCaretInFlowLineV106(line,true);
+  }
+},true);
+
+/* Enter in a task title means: continue ordinary Memo text under that task. */
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Enter')return;
+  const text=e.target.closest?.('.inline-task-text');
+  if(!text)return;
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  let wrap=text.closest('.inline-task-wrap');
+  const ed=text.closest('.rich-editor');
+  if(!wrap||!ed)return;
+
+  /* For nested tasks, move to the flow line after the outermost top-level task. */
+  let top=wrap;
+  while(top.parentElement?.classList?.contains('inline-children')){
+    const parent=top.parentElement.closest('.inline-task-wrap');
+    if(!parent)break;
+    top=parent;
+  }
+
+  ensureFlowLinesV106(ed);
+  let line=top.nextElementSibling;
+  if(!isFlowLineV106(line)){
+    line=makeEditableFlowLineV106();
+    top.insertAdjacentElement('afterend',line);
+  }
+  setCaretInFlowLineV106(line);
+},true);
+
+/* Paste images at the current caret in ANY rich editor.
+   Existing module-specific image upload logic can still coexist. */
+document.addEventListener('paste',e=>{
+  const ed=e.target.closest?.('.rich-editor');
+  if(!ed)return;
+
+  const items=[...(e.clipboardData?.items||[])];
+  const imageItem=items.find(i=>i.type?.startsWith('image/'));
+  if(!imageItem)return;
+
+  const file=imageItem.getAsFile();
+  if(!file)return;
+
+  e.preventDefault();
+
+  const reader=new FileReader();
+  reader.onload=()=>{
+    const img=document.createElement('img');
+    img.src=reader.result;
+    img.className='inline-rich-image';
+    img.alt='pasted image';
+
+    const sel=window.getSelection();
+    if(sel && sel.rangeCount && ed.contains(sel.anchorNode)){
+      const range=sel.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(img);
+      const space=document.createTextNode(' ');
+      img.after(space);
+      range.setStartAfter(space);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }else{
+      ensureFlowLinesV106(ed);
+      const line=[...ed.children].reverse().find(x=>isFlowLineV106(x))||makeEditableFlowLineV106();
+      if(!line.parentElement)ed.appendChild(line);
+      line.innerHTML='';
+      line.appendChild(img);
+      line.appendChild(document.createElement('br'));
+    }
+  };
+  reader.readAsDataURL(file);
+},true);
+
+/* Hydration for Kanban / Project / SOP / Memo / Template editors. */
+function hydrateAllRichEditors(){
+  document.querySelectorAll('.rich-editor').forEach(ed=>{
+    upgradeRichEditorTasks(ed);
+    ensureFlowLinesV106(ed);
+  });
+}
+
+/* Keep one editable flow line after tasks while removing accidental duplicate blanks.
+   We don't remove a flow line just because it is blank: it is the user's typing area. */
+function cleanRichEditorBlankLinesV104(editor){
+  if(!editor)return;
+  [...editor.children].forEach(ch=>{
+    if(isFlowLineV106(ch))return;
+    if(isEmptyRichBlockV104(ch))ch.remove();
+  });
+  ensureFlowLinesV106(editor);
+}
+
+/* ======================= END V10.6 ======================= */

@@ -236,3 +236,7 @@ input,select,textarea{width:100%;border:1px solid var(--line);border-radius:11px
 @media(max-width:1150px){
   .today-top-row,.today-work-calendar-grid,.routine-page-layout{grid-template-columns:1fr}
 }
+
+/* V10.1 */
+.routine-task-icon.pending,.legend-routine-example.pending{color:#ec4899!important;}
+.routine-task-icon.complete,.legend-routine-example.complete{color:#a2a7b0!important;filter:grayscale(1);}

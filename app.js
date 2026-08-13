@@ -1766,3 +1766,29 @@ function renderToday(){
   setTimeout(()=>updateTagSearchV10(tagSearchTextV10),0);
 }
 /* ======================= END V10 OVERRIDES ======================= */
+
+
+/* ======================= V10.1 OVERRIDES ======================= */
+function kanbanTasksForCardV101(t){
+  if(Array.isArray(t.checks)&&countTasks(t.checks).all)return t.checks;
+  if(!t.html)return [];
+  const box=document.createElement('div');box.innerHTML=t.html;
+  const roots=[...box.querySelectorAll('.inline-task')].filter(el=>!el.parentElement.closest('.inline-task'));
+  return roots.map(collectInlineTaskEl).filter(x=>x.text);
+}
+function cardHtml(t,c=null){
+  c=c||columnForCard(t); const tasks=kanbanTasksForCardV101(t),n=countTasks(tasks);
+  const search=((t.title||'')+' '+(t.tags||[]).join(' ')).toLowerCase();
+  return `<div class="task-card ${t.completedAt?'done-card':''}" data-search="${esc(search)}" draggable="true" style="background:${cardColorFor(t,c)}" ondragstart="event.dataTransfer.setData('text/plain','${t.id}')">
+    ${kanbanMiniActions(t)}<div class="card-topline"><input class="main-check" type="checkbox" ${t.completedAt?'checked':''} onclick="event.stopPropagation()" onchange="finishKanbanTask('${t.id}',this.checked)"><div class="card-body" onclick="openKanbanCard('${t.id}')"><div class="item-title">${esc(t.title)}</div><div class="tags">${tagHtml(t.tags)}</div><div class="item-meta">Start ${fmtTime(t.startedAt)} · Done ${fmtTime(t.completedAt)} · ${n.done}/${n.all} 子任务</div>${t.plannedStartAt?`<span class="micro-due">计划开始 ${esc(t.plannedStartAt.replace('T',' '))}</span>`:''}${t.dueAt?`<span class="micro-due ${dueClass(t.dueAt)}">${dueText(t.dueAt)}</span>`:''}</div></div>${t.showMemo&&t.html?`<div class="rich-preview compact-preview">${t.html}</div>`:''}${n.all?`<div class="sub-list">${taskQuickTree(tasks,'kanban',t.id)}</div>`:''}</div>`;
+}
+async function saveKanbanDrawer(id){
+  let t=id?state.kanban.find(x=>x.id===id):{id:uid(),images:[],startedAt:null,completedAt:null,showMemo:false,archived:false};
+  const tasks=collectInlineTasks('kanbanRich');
+  Object.assign(t,{title:$('#kcTitle').value.trim(),status:$('#kcStatus').value,tags:splitTags($('#kcTags').value),html:$('#kanbanRich').innerHTML,checks:structuredClone(tasks),plannedStartAt:$('#kcPlanned').value,dueAt:$('#kcDue').value,cardColor:$('#kcColor').value});
+  if(tasks.length&&tasksAllDone(tasks)&&!t.completedAt){if(!t.startedAt)t.startedAt=Date.now();t.completedAt=Date.now();t.status=state.kanbanColumns.find(c=>String(c.name).toUpperCase()==='DONE')?.id||'done';}
+  if(!id)state.kanban.push(t);
+  const rule=state.kanbanRecurring?.find(r=>r.sourceCardId===t.id);if(rule)rule.snapshot=recurringSnapshotFromCard(t);
+  await saveState();closeDrawer();renderKanban();
+}
+/* ======================= END V10.1 ======================= */

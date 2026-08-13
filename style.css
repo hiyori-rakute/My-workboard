@@ -270,3 +270,14 @@ input,select,textarea{width:100%;border:1px solid var(--line);border-radius:11px
 .inline-task{
   grid-template-columns:auto auto minmax(90px,1fr) auto auto auto auto auto auto!important;
 }
+
+/* V10.4 */
+.inline-task{
+  grid-template-columns:auto auto minmax(90px,1fr) auto auto auto auto auto auto auto auto!important;
+}
+.inline-level-in,.inline-level-out{
+  color:#59657a;
+}
+.inline-children{
+  margin-left:30px;
+}

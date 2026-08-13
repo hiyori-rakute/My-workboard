@@ -2168,3 +2168,217 @@ async function saveProjectDrawerV9(id){
   await saveState();closeDrawer();renderProjects();toast('项目已保存');
 }
 /* ======================= END V10.3 ======================= */
+
+
+/* ======================= V10.4 RICH BLANK-LINE + TASK HIERARCHY ======================= */
+
+/* ---------- remove empty rich-text blocks with Backspace/Delete ---------- */
+function isEmptyRichBlockV104(node){
+  if(!node || node.nodeType!==1)return false;
+  if(node.matches('.inline-task-wrap,.inline-task,.inline-children'))return false;
+  if(node.querySelector('.inline-task,.inline-task-wrap,img,video,iframe,input,button'))return false;
+  const text=(node.textContent||'').replace(/\u200B|\u00A0/g,'').trim();
+  const onlyBreaks=[...node.childNodes].every(n=>{
+    if(n.nodeType===3)return !(n.textContent||'').replace(/\u200B|\u00A0/g,'').trim();
+    return n.nodeType===1 && n.tagName==='BR';
+  });
+  return !text && onlyBreaks;
+}
+
+function closestDirectRichBlockV104(editor,node){
+  if(!editor||!node)return null;
+  let el=node.nodeType===1?node:node.parentElement;
+  while(el && el.parentElement!==editor){
+    if(el.classList?.contains('inline-task-wrap'))return null;
+    el=el.parentElement;
+  }
+  return el && el.parentElement===editor ? el : null;
+}
+
+function placeCaretNearRemovedV104(editor,removedIndex){
+  const candidates=[...editor.childNodes].filter(n=>n.nodeType===1||n.nodeType===3);
+  const target=candidates[Math.min(Math.max(removedIndex-1,0),candidates.length-1)]||editor;
+  const range=document.createRange(),sel=window.getSelection();
+  try{
+    range.selectNodeContents(target);
+    range.collapse(false);
+    sel.removeAllRanges();sel.addRange(range);
+  }catch{}
+}
+
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Backspace' && e.key!=='Delete')return;
+  const editor=e.target.closest?.('.rich-editor');
+  if(!editor)return;
+
+  const sel=window.getSelection();
+  if(!sel || !sel.rangeCount || !sel.isCollapsed)return;
+
+  const block=closestDirectRichBlockV104(editor,sel.anchorNode);
+  if(block && isEmptyRichBlockV104(block)){
+    e.preventDefault();
+    const idx=[...editor.childNodes].indexOf(block);
+    block.remove();
+    placeCaretNearRemovedV104(editor,idx);
+    return;
+  }
+
+  /* Browser sometimes leaves bare <br> as an empty row. */
+  if(sel.anchorNode===editor){
+    const offset=sel.anchorOffset;
+    const node=editor.childNodes[offset] || editor.childNodes[offset-1];
+    if(node?.nodeType===1 && isEmptyRichBlockV104(node)){
+      e.preventDefault();
+      const idx=[...editor.childNodes].indexOf(node);
+      node.remove();
+      placeCaretNearRemovedV104(editor,idx);
+    }
+  }
+},true);
+
+/* Also clean useless empty rows on save, but keep intentional text, images and tasks. */
+function cleanRichEditorBlankLinesV104(editor){
+  if(!editor)return;
+  [...editor.children].forEach(ch=>{
+    if(isEmptyRichBlockV104(ch))ch.remove();
+  });
+}
+
+/* ---------- task hierarchy controls ---------- */
+function taskWrapDirectParentV104(wrap){
+  const p=wrap?.parentElement;
+  if(!p)return null;
+  if(p.classList?.contains('inline-children')){
+    return p.closest('.inline-task-wrap');
+  }
+  return null;
+}
+
+function previousTaskSiblingV104(wrap){
+  let prev=wrap?.previousElementSibling;
+  while(prev && !prev.classList?.contains('inline-task-wrap'))prev=prev.previousElementSibling;
+  return prev||null;
+}
+
+/* Make current task a child of the previous sibling. */
+function indentTaskHierarchyV104(btn){
+  const wrap=btn.closest('.inline-task-wrap');if(!wrap)return;
+  const prev=previousTaskSiblingV104(wrap);
+  if(!prev){toast('前面没有可以作为父任务的任务');return;}
+
+  let children=[...prev.children].find(n=>n.classList?.contains('inline-children'));
+  if(!children){
+    children=document.createElement('div');
+    children.className='inline-children';
+    prev.appendChild(children);
+  }
+  children.appendChild(wrap);
+}
+
+/* Promote current task one level upward, placing it after its former parent. */
+function outdentTaskHierarchyV104(btn){
+  const wrap=btn.closest('.inline-task-wrap');if(!wrap)return;
+  const parentWrap=taskWrapDirectParentV104(wrap);
+  if(!parentWrap){toast('已经是最上层任务');return;}
+
+  const parentContainer=parentWrap.parentElement;
+  parentContainer.insertBefore(wrap,parentWrap.nextElementSibling);
+}
+
+/* Current task markup with hierarchy buttons. */
+function inlineTaskMarkup(t={}){
+  const id=t.id||uid(),title=esc(t.text||t.title||'新子任务');
+  const planned=esc(t.plannedStartAt||''),due=esc(t.dueAt||''),st=t.startedAt||'',done=t.completedAt||'';
+  const checked=t.done||t.completedAt,children=t.children||[];
+  return `<div class="inline-task-wrap" data-wrapper-id="${id}">
+    <span class="inline-task" data-task-id="${id}" data-planned="${planned}" data-started="${st||''}" data-completed="${done||''}" data-due="${due}" contenteditable="false">
+      <button type="button" class="inline-start task-icon" title="Start" onclick="inlineTaskStart(this)">▶</button>
+      <input type="checkbox" ${checked?'checked':''} onchange="inlineTaskDone(this)">
+      <span class="inline-task-text" contenteditable="true">${title}</span>
+      <button type="button" class="inline-up task-icon" title="上移" onclick="moveInlineTask(this,-1)">↑</button>
+      <button type="button" class="inline-down task-icon" title="下移" onclick="moveInlineTask(this,1)">↓</button>
+      <button type="button" class="inline-level-in task-icon" title="变成上一条任务的次级任务" onclick="indentTaskHierarchyV104(this)">↪</button>
+      <button type="button" class="inline-level-out task-icon" title="提升一级" onclick="outdentTaskHierarchyV104(this)">↩</button>
+      <button type="button" class="inline-planned task-icon" title="预计开始时间" onclick="inlineTaskPlanned(this)">📅</button>
+      <button type="button" class="inline-due task-icon" title="预计完成时间" onclick="inlineTaskDue(this)">⏰</button>
+      <button type="button" class="inline-child task-icon" title="直接新建下级子任务" onclick="inlineTaskChild(this)">↳＋</button>
+      <button type="button" class="inline-delete task-icon danger-icon" title="删除这个子任务" onclick="removeInlineTask(this)">✕</button>
+      <span class="inline-task-meta">${taskMetaTextV103({plannedStartAt:planned,startedAt:st?Number(st):null,dueAt:due,completedAt:done?Number(done):null})}</span>
+    </span>
+    <div class="inline-children">${children.map(inlineTaskMarkup).join('')}</div>
+  </div>`;
+}
+
+/* Upgrade all V8~V10.3 stored task nodes with the two hierarchy buttons. */
+function upgradeRichEditorTasks(root){
+  if(!root)return;
+  root.querySelectorAll('.inline-task').forEach(task=>{
+    task.setAttribute('contenteditable','false');
+    task.dataset.planned??='';
+    const add=(cls,text,title,handler)=>{
+      if(task.querySelector(':scope > .'+cls))return;
+      const b=document.createElement('button');
+      b.type='button';b.className=`${cls} task-icon`;b.title=title;b.textContent=text;b.onclick=handler;
+      task.insertBefore(b,task.querySelector(':scope > .inline-task-meta')||null);
+    };
+    add('inline-up','↑','上移',function(){moveInlineTask(this,-1)});
+    add('inline-down','↓','下移',function(){moveInlineTask(this,1)});
+    add('inline-level-in','↪','变成上一条任务的次级任务',function(){indentTaskHierarchyV104(this)});
+    add('inline-level-out','↩','提升一级',function(){outdentTaskHierarchyV104(this)});
+    add('inline-planned','📅','预计开始时间',function(){inlineTaskPlanned(this)});
+    add('inline-due','⏰','预计完成时间',function(){inlineTaskDue(this)});
+    add('inline-child','↳＋','直接新建下级子任务',function(){inlineTaskChild(this)});
+    add('inline-delete','✕','删除这个子任务',function(){removeInlineTask(this)});
+    refreshInlineTaskV103(task);
+  });
+}
+
+/* Capture hierarchy buttons too, for Edge/contenteditable reliability. */
+document.addEventListener('click',e=>{
+  const i=e.target.closest?.('.inline-level-in');
+  if(i){e.preventDefault();e.stopPropagation();indentTaskHierarchyV104(i);return;}
+  const o=e.target.closest?.('.inline-level-out');
+  if(o){e.preventDefault();e.stopPropagation();outdentTaskHierarchyV104(o);return;}
+},true);
+
+/* ---------- save hooks: clean blank lines before serializing ---------- */
+async function saveKanbanDrawer(id){
+  const ed=$('#kanbanRich');cleanRichEditorBlankLinesV104(ed);
+  let t=id?state.kanban.find(x=>x.id===id):{id:uid(),images:[],startedAt:null,completedAt:null,showMemo:false,archived:false};
+  const tasks=collectInlineTasks('kanbanRich');
+  Object.assign(t,{title:$('#kcTitle').value.trim(),status:$('#kcStatus').value,tags:splitTags($('#kcTags').value),html:ed.innerHTML,checks:structuredClone(tasks),plannedStartAt:$('#kcPlanned').value,dueAt:$('#kcDue').value,cardColor:$('#kcColor').value});
+  if(tasks.length&&tasksAllDone(tasks)&&!t.completedAt){
+    if(!t.startedAt)t.startedAt=Date.now();t.completedAt=Date.now();
+    t.status=state.kanbanColumns.find(c=>String(c.name).toUpperCase()==='DONE')?.id||'done';
+  }
+  if(!id)state.kanban.push(t);
+  const rule=state.kanbanRecurring?.find(r=>r.sourceCardId===t.id);if(rule)rule.snapshot=recurringSnapshotFromCard(t);
+  await saveState();closeDrawer();renderKanban();
+}
+
+async function saveProjectDrawerV9(id){
+  const ed=$('#projectRich');cleanRichEditorBlankLinesV104(ed);
+  const p=state.projects.find(x=>x.id===id);
+  const tasks=collectInlineTasks('projectRich').map(x=>({...x,title:x.text,note:''}));
+  Object.assign(p,{title:$('#pdTitle').value.trim(),categoryId:$('#pdCat').value,plannedStartAt:$('#pdPlanned').value,dueAt:$('#pdDue').value,status:$('#pdStatus').value,tags:splitTags($('#pdTags').value),html:ed.innerHTML,subtasks:tasks,handoffs:collectRichNotes('handoffs'),reports:collectRichNotes('reports'),questions:collectRichNotes('questions'),investigations:collectRichNotes('investigations')});
+  if(p.subtasks.length&&p.subtasks.every(x=>x.done||x.completedAt)&&!p.completedAt){
+    if(!p.startedAt)p.startedAt=Date.now();p.completedAt=Date.now();p.status='done';
+  }
+  await saveState();closeDrawer();renderProjects();toast('项目已保存');
+}
+
+async function saveMemoV7(id){
+  const m=state.memos.find(x=>x.id===id);if(!m)return;
+  const ed=$('#memoRich');cleanRichEditorBlankLinesV104(ed);
+  Object.assign(m,{title:$('#memoTitle').value.trim()||'Untitled Memo',tags:splitTags($('#memoTags').value),html:ed.innerHTML,checks:collectMemoChecks(m.checks||[]),updatedAt:Date.now()});
+  await saveState();toast('Memo 已保存');renderMemo();
+}
+
+/* Generic helper for SOP/template editors: whenever their existing save code reads
+   innerHTML, blank direct rows are already removed on focusout. */
+document.addEventListener('focusout',e=>{
+  const ed=e.target.closest?.('.rich-editor');
+  if(ed)cleanRichEditorBlankLinesV104(ed);
+},true);
+
+/* ======================= END V10.4 ======================= */

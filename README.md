@@ -1,14 +1,15 @@
-# My Workboard V10.7
+# My Workboard V10.8
 
-图片处理修复：
+本版只针对图片重复插入做根修复：
 
-- 修复 Ctrl+V 一次却插入两张相同图片。
-  原因：旧 wireImageDrop paste handler + V10.6 全局 paste handler 同时执行。
-- 现在所有富文本只保留一套图片粘贴逻辑。
-- Kanban / Project / SOP / Memo / Templates：
-  Ctrl+V 图片只插入一次，并插在当前富文本光标位置。
-- 拖拽图片到编辑器或下方 Drop Zone，也只插入富文本，不另存第二份。
-- 修复 Memo：
-  粘贴图片不再触发 renderMemo，不会清空尚未保存的文字/子任务。
-  图片直接留在“内容”富文本框中的当前位置。
-- 旧版本已经存在于 m.images 的独立图片不会丢失，暂时折叠显示为“旧版本独立图片”。
+- 找到 V10.7 仍然重复的真实原因：
+  app.js 中 V10.6 的 document paste listener 仍然存在，并且比 V10.7 listener 更早执行。
+- V10.8 直接从代码中删除 V10.6 旧 listener，不再靠后续 listener 阻止它。
+- 同时禁用最早期 wireImageDrop() 的 ed.onpaste 绑定。
+- 最终只保留一条图片粘贴路径。
+- Kanban / Memo / Project / SOP / Templates 均共用同一套。
+- Ctrl+V 一张截图应只插入一张。
+- Memo 不会重新 render，也不会清空未保存内容。
+- 拖拽图片也统一走单一插入逻辑。
+
+缓存版本：10.8.0

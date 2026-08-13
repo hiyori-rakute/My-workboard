@@ -151,7 +151,7 @@ function insertImageAtCaret(id,data){document.getElementById(id)?.focus();docume
 function wireImageDrop(zoneId,editorId,callback){
  const z=document.getElementById(zoneId),ed=document.getElementById(editorId); if(!ed)return;
  if(z){z.ondragover=e=>e.preventDefault();z.ondrop=e=>{e.preventDefault();filesToData([...e.dataTransfer.files],im=>{insertImageAtCaret(editorId,im.data);callback?.(im)})}}
- ed.onpaste=e=>{const fs=[...e.clipboardData.items].filter(i=>i.type.startsWith('image/')).map(i=>i.getAsFile());if(fs.length){e.preventDefault();filesToData(fs,im=>{insertImageAtCaret(editorId,im.data);callback?.(im)})}};
+ /* V10.8: legacy ed.onpaste removed; unified document paste handler owns image paste. */ ed.onpaste=null;
 }
 function filesToData(files,cb){files.filter(f=>f&&f.type.startsWith('image/')).forEach(f=>{const r=new FileReader();r.onload=()=>cb({id:uid(),name:f.name||'pasted-image',data:r.result});r.readAsDataURL(f)})}
 
@@ -2676,50 +2676,7 @@ document.addEventListener('keydown',e=>{
   setCaretInFlowLineV106(line);
 },true);
 
-/* Paste images at the current caret in ANY rich editor.
-   Existing module-specific image upload logic can still coexist. */
-document.addEventListener('paste',e=>{
-  const ed=e.target.closest?.('.rich-editor');
-  if(!ed)return;
-
-  const items=[...(e.clipboardData?.items||[])];
-  const imageItem=items.find(i=>i.type?.startsWith('image/'));
-  if(!imageItem)return;
-
-  const file=imageItem.getAsFile();
-  if(!file)return;
-
-  e.preventDefault();
-
-  const reader=new FileReader();
-  reader.onload=()=>{
-    const img=document.createElement('img');
-    img.src=reader.result;
-    img.className='inline-rich-image';
-    img.alt='pasted image';
-
-    const sel=window.getSelection();
-    if(sel && sel.rangeCount && ed.contains(sel.anchorNode)){
-      const range=sel.getRangeAt(0);
-      range.deleteContents();
-      range.insertNode(img);
-      const space=document.createTextNode(' ');
-      img.after(space);
-      range.setStartAfter(space);
-      range.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }else{
-      ensureFlowLinesV106(ed);
-      const line=[...ed.children].reverse().find(x=>isFlowLineV106(x))||makeEditableFlowLineV106();
-      if(!line.parentElement)ed.appendChild(line);
-      line.innerHTML='';
-      line.appendChild(img);
-      line.appendChild(document.createElement('br'));
-    }
-  };
-  reader.readAsDataURL(file);
-},true);
+/* V10.8: removed obsolete V10.6 global paste listener. V10.7+ unified handler is the only paste path. */
 
 /* Hydration for Kanban / Project / SOP / Memo / Template editors. */
 function hydrateAllRichEditors(){
@@ -2913,3 +2870,50 @@ function memoEditorV107(m){
 }
 
 /* ======================= END V10.7 ======================= */
+
+
+/* ======================= V10.8 SINGLE-PASTE GUARANTEE ======================= */
+let lastRichPasteSignatureV108='';
+let lastRichPasteAtV108=0;
+
+function richPasteSignatureV108(file,editorId){
+  return `${editorId}|${file?.type||''}|${file?.size||0}|${file?.name||''}|${file?.lastModified||0}`;
+}
+
+/* Redefine wiring one last time: paste is NEVER attached here. */
+function wireImageDrop(zoneId,editorId,callback){
+  const zone=zoneId?document.getElementById(zoneId):null;
+  const ed=document.getElementById(editorId);
+  if(!ed)return;
+
+  ed.onpaste=null;
+
+  if(zone){
+    zone.ondragover=e=>{e.preventDefault();zone.classList.add('drag-active-v107')};
+    zone.ondragleave=()=>zone.classList.remove('drag-active-v107');
+    zone.ondrop=e=>{
+      e.preventDefault();
+      e.stopPropagation();
+      zone.classList.remove('drag-active-v107');
+      const files=[...e.dataTransfer.files].filter(f=>f?.type?.startsWith('image/'));
+      files.forEach(file=>{
+        const reader=new FileReader();
+        reader.onload=()=>insertInlineImageNodeV107(editorId,reader.result);
+        reader.readAsDataURL(file);
+      });
+    };
+  }
+
+  ed.ondragover=e=>e.preventDefault();
+  ed.ondrop=e=>{
+    e.preventDefault();
+    e.stopPropagation();
+    const files=[...e.dataTransfer.files].filter(f=>f?.type?.startsWith('image/'));
+    files.forEach(file=>{
+      const reader=new FileReader();
+      reader.onload=()=>insertInlineImageNodeV107(editorId,reader.result);
+      reader.readAsDataURL(file);
+    });
+  };
+}
+/* ======================= END V10.8 ======================= */

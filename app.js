@@ -2919,271 +2919,78 @@ function wireImageDrop(zoneId,editorId,callback){
 /* ======================= END V10.8 ======================= */
 
 
-/* ======================= V10.9 RECURRENCE FINAL OVERRIDES ======================= */
-function lastDayOfMonthV109(y,m){return new Date(y,m,0).getDate()}
-function datePartsV109(v){const [y,m,d]=String(v).slice(0,10).split('-').map(Number);const dt=new Date(y,m-1,d,12);return{y,m,d,weekday:dt.getDay(),dt}}
-function ymdV109(dt){return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`}
-function monthsBetweenV109(a,b){return (b.getFullYear()-a.getFullYear())*12+(b.getMonth()-a.getMonth())}
-function sameNumsV109(a,b){return JSON.stringify((a||[]).map(Number).sort())===JSON.stringify((b||[]).map(Number).sort())}
+/* ======================= V10.11 STABLE RECURRENCE ======================= */
+/* Built on V10.8 stable UI. Only recurrence-related functions are overridden. */
 
-/* ---------- Kanban recurrence ---------- */
-function scheduledDateForRuleV109(rule,now=new Date()){
-  const y=now.getFullYear(),m=now.getMonth()+1,last=lastDayOfMonthV109(y,m);
-  const freq=rule.frequency||'monthly';
-  if(freq==='daily')return new Date(y,m-1,now.getDate(),9);
-  if(freq==='weekly'){
-    const wanted=Number(rule.weekday??1),delta=(now.getDay()-wanted+7)%7;
-    const d=new Date(y,m-1,now.getDate()-delta,9);return d;
-  }
-  if(freq==='monthly'||freq==='monthend'){
-    const day=(freq==='monthend'||rule.monthEnd)?last:Math.min(Number(rule.dayOfMonth||1),last);
-    return new Date(y,m-1,day,9);
-  }
-  if(freq==='quarterly'){
-    const anchor=datePartsV109(rule.anchorDate||todayISO());
-    if(monthsBetweenV109(anchor.dt,new Date(y,m-1,1,12))<0)return null;
-    if(monthsBetweenV109(anchor.dt,new Date(y,m-1,1,12))%3!==0)return null;
-    const day=rule.monthEnd?last:Math.min(Number(rule.dayOfMonth||anchor.d||1),last);
-    return new Date(y,m-1,day,9);
-  }
-  if(freq==='yearly'){
-    const months=(rule.months?.length?rule.months:[Number(rule.monthOfYear||1)]).map(Number);
-    if(!months.includes(m))return null;
-    const day=rule.monthEnd?last:Math.min(Number(rule.dayOfMonth||1),last);
-    return new Date(y,m-1,day,9);
-  }
-  return null;
+function recDatePartsV1011(ds){
+  const [y,m,d]=String(ds).slice(0,10).split('-').map(Number);
+  const dt=new Date(y,m-1,d);
+  return {y,m,d,wd:dt.getDay(),dt};
 }
-function recurrenceDue(rule,d=new Date()){
-  if(!rule?.enabled)return false;
-  const scheduled=scheduledDateForRuleV109(rule,d);if(!scheduled)return false;
-  return d>=scheduled;
+function recISOFromDateV1011(dt){
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
 }
-function recurrenceKey(rule,d=new Date()){
-  const scheduled=scheduledDateForRuleV109(rule,d);if(!scheduled)return '';
-  const freq=rule.frequency||'monthly';
-  if(freq==='daily')return ymdV109(scheduled);
-  if(freq==='weekly')return `W:${ymdV109(scheduled)}`;
-  return `${freq}:${ymdV109(scheduled)}`;
-}
-function toggleRepeatFieldsV109(){
-  const f=$('#repFreq')?.value;if(!f)return;
-  const show=(id,on)=>{const e=$(id);if(e)e.style.display=on?'':'none'};
-  show('#repWeekBox',f==='weekly');
-  show('#repQuarterBox',f==='quarterly');
-  show('#repYearBox',f==='yearly');
-  show('#repDayBox',['monthly','quarterly','yearly'].includes(f));
-  show('#repMonthEndWrap',['monthly','quarterly','yearly'].includes(f));
-}
-function openRepeatModal(id){
-  const t=state.kanban.find(x=>x.id===id);if(!t)return;
-  const r=state.kanbanRecurring.find(x=>x.sourceCardId===id)||{frequency:'monthly',dayOfMonth:1,monthOfYear:1,months:[1],weekday:1,targetColumnId:t.status,enabled:true,anchorDate:todayISO(),monthEnd:false};
-  const months=r.months?.length?r.months:[Number(r.monthOfYear||1)];
-  modal(`<h2>🔁 定期重复</h2>
-    <div class="form-field"><label>频率</label><select id="repFreq" onchange="toggleRepeatFieldsV109()">
-      <option value="daily" ${r.frequency==='daily'?'selected':''}>每天</option>
-      <option value="weekly" ${r.frequency==='weekly'?'selected':''}>每周</option>
-      <option value="monthly" ${r.frequency==='monthly'?'selected':''}>每月</option>
-      <option value="monthend" ${r.frequency==='monthend'?'selected':''}>每月最后一天</option>
-      <option value="quarterly" ${r.frequency==='quarterly'?'selected':''}>每3个月</option>
-      <option value="yearly" ${r.frequency==='yearly'?'selected':''}>每年指定月份</option>
-    </select></div>
-    <div id="repWeekBox" class="form-field"><label>星期（0=日, 1=一 … 6=六）</label><input id="repWeek" type="number" min="0" max="6" value="${r.weekday??1}"></div>
-    <div id="repQuarterBox" class="form-field"><label>每3个月起算日期</label><input id="repAnchor" type="date" value="${esc(r.anchorDate||todayISO())}"></div>
-    <div id="repYearBox" class="form-field"><label>每年执行月份（可多选，例如 4月 + 8月）</label><div class="month-picks-v109">${Array.from({length:12},(_,i)=>i+1).map(m=>`<label><input type="checkbox" class="repMonthV109" value="${m}" ${months.includes(m)?'checked':''}>${m}月</label>`).join('')}</div></div>
-    <div id="repDayBox" class="form-field"><label>执行日</label><input id="repDay" type="number" min="1" max="31" value="${r.dayOfMonth||1}"></div>
-    <label id="repMonthEndWrap" class="checkbox-line"><input id="repMonthEnd" type="checkbox" ${r.monthEnd?'checked':''}>该月最后一天执行</label>
-    <div class="form-field"><label>自动生成到哪一列</label><select id="repCol">${state.kanbanColumns.map(c=>`<option value="${c.id}" ${r.targetColumnId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div>
-    <label class="checkbox-line"><input id="repEnabled" type="checkbox" ${r.enabled!==false?'checked':''}>启用</label>
-    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRepeatRuleV109('${id}')">保存</button></div>`);
-  setTimeout(toggleRepeatFieldsV109,0);
-}
-async function saveRepeatRuleV109(id){
-  const t=state.kanban.find(x=>x.id===id);let r=state.kanbanRecurring.find(x=>x.sourceCardId===id);
-  if(!r){r={id:uid(),sourceCardId:id};state.kanbanRecurring.push(r)}
-  const months=$$('.repMonthV109:checked').map(x=>Number(x.value));
-  Object.assign(r,{name:t.title,frequency:$('#repFreq').value,dayOfMonth:+($('#repDay')?.value||1),weekday:+($('#repWeek')?.value||1),anchorDate:$('#repAnchor')?.value||todayISO(),months:months.length?months:[1],monthOfYear:Number(months[0]||1),monthEnd:!!$('#repMonthEnd')?.checked,targetColumnId:$('#repCol').value,enabled:$('#repEnabled').checked,snapshot:recurringSnapshotFromCard(t),lastGeneratedKey:null});
-  ensureRecurringKanban();await saveState();closeModal();renderKanban();toast('定期重复已保存');
-}
-function ensureRecurringKanban(){
-  let changed=false,now=new Date();
-  for(const r of state.kanbanRecurring||[]){
-    if(!r.enabled||!recurrenceDue(r,now))continue;
-    const key=recurrenceKey(r,now);if(!key||r.lastGeneratedKey===key)continue;
-    const scheduled=scheduledDateForRuleV109(r,now);if(!scheduled)continue;
-    const snap=r.snapshot||{}, ds=ymdV109(scheduled);
-    const card={id:uid(),title:snap.title||r.name||'定期任务',status:r.targetColumnId||state.kanbanColumns[0]?.id||'todo',html:snap.html||'',checks:clearTaskTimes(snap.checks||[]),images:[],tags:[...(snap.tags||[])],startedAt:null,completedAt:null,dueAt:'',plannedStartAt:`${ds}T09:00`,showMemo:false,archived:false,recurrenceRuleId:r.id,generatedKey:key,createdAt:Date.now()};
-    card.html=mergeTasksIntoHtml(card.html,card.checks);state.kanban.push(card);r.lastGeneratedKey=key;changed=true;
-  }
-  return changed;
-}
+function recLastDayV1011(y,m){return new Date(y,m,0).getDate()}
+function recMonthsDiffV1011(a,b){return (b.getFullYear()-a.getFullYear())*12+(b.getMonth()-a.getMonth())}
 
-/* ---------- Routine recurrence + calendar ---------- */
-function routineModeV109(r){return r.repeatV109||r.repeat||'weekdays'}
-function routineExplicitWeekdaysV109(r){return (r.weekdays||[]).map(Number)}
-function isRoutineDue(r,date){
-  const p=datePartsV109(date),mode=routineModeV109(r),wds=routineExplicitWeekdaysV109(r);
-  if(mode==='daily')return true;
-  if(mode==='weekdays'){
-    /* legacy compatibility: if user manually narrowed weekday checks, honor them */
-    if(wds.length && !sameNumsV109(wds,[1,2,3,4,5]))return wds.includes(p.weekday);
-    return p.weekday>=1&&p.weekday<=5;
-  }
-  if(mode==='custom')return wds.includes(p.weekday);
-  if(mode==='monthly')return p.d===Math.min(Number(r.monthDay||1),lastDayOfMonthV109(p.y,p.m));
-  if(mode==='monthend')return p.d===lastDayOfMonthV109(p.y,p.m);
-  if(mode==='quarterly'){
-    const a=datePartsV109(r.anchorDate||todayISO()),diff=monthsBetweenV109(a.dt,new Date(p.y,p.m-1,1,12));
-    if(diff<0||diff%3!==0)return false;
-    const day=r.monthEnd?lastDayOfMonthV109(p.y,p.m):Math.min(Number(r.monthDay||a.d||1),lastDayOfMonthV109(p.y,p.m));
-    return p.d===day;
-  }
-  if(mode==='yearly'){
-    const ms=(r.months?.length?r.months:[Number(r.month||1)]).map(Number);if(!ms.includes(p.m))return false;
-    const day=r.monthEnd?lastDayOfMonthV109(p.y,p.m):Math.min(Number(r.monthDay||1),lastDayOfMonthV109(p.y,p.m));return p.d===day;
-  }
-  return false;
+function legacyRoutineConditionV1011(r){
+  if(r.repeat==='daily')return {type:'daily'};
+  if(r.repeat==='weekdays')return {type:'weekly',weekdays:[1,2,3,4,5]};
+  return {type:'weekly',weekdays:(r.weekdays||[]).map(Number)};
 }
-function repeatText(r){
-  const mode=routineModeV109(r),wds=routineExplicitWeekdaysV109(r),names=['日','一','二','三','四','五','六'];
-  if(mode==='daily')return '每天';
-  if(mode==='weekdays'&&wds.length&&!sameNumsV109(wds,[1,2,3,4,5]))return '每周 '+wds.map(x=>names[x]).join('、');
-  if(mode==='weekdays')return '工作日';
-  if(mode==='custom')return '每周 '+wds.map(x=>names[x]).join('、');
-  if(mode==='monthly')return `每月${r.monthDay||1}日`;
-  if(mode==='monthend')return '每月最后一天';
-  if(mode==='quarterly')return `每3个月${r.monthEnd?'月末':(r.monthDay||1)+'日'}`;
-  if(mode==='yearly')return `每年 ${(r.months||[r.month||1]).join('、')}月 ${r.monthEnd?'月末':(r.monthDay||1)+'日'}`;
-  return mode;
+function legacyKanbanConditionV1011(r){
+  if(r.frequency==='daily')return {type:'daily'};
+  if(r.frequency==='weekly')return {type:'weekly',weekdays:[Number(r.weekday??1)]};
+  if(r.frequency==='yearly')return {type:'yearly',months:[Number(r.monthOfYear||1)],day:Number(r.dayOfMonth||1)};
+  return {type:'monthly',day:Number(r.dayOfMonth||1)};
 }
-function toggleRoutineFieldsV109(){
-  const m=$('#rRepeatV109')?.value;if(!m)return;const show=(id,on)=>{const e=$(id);if(e)e.style.display=on?'':'none'};
-  show('#rWeekBoxV109',m==='custom'||m==='weekdays');
-  show('#rDayBoxV109',['monthly','quarterly','yearly'].includes(m));
-  show('#rAnchorBoxV109',m==='quarterly');
-  show('#rMonthsBoxV109',m==='yearly');
-  show('#rMonthEndBoxV109',['monthly','quarterly','yearly'].includes(m));
-}
-function openRoutineModal(id){
-  const r=state.routines.find(x=>x.id===id)||{name:'',repeat:'weekdays',weekdays:[1,2,3,4,5],subtasks:[],tags:[],icon:'●',monthDay:1,months:[1],monthEnd:false,anchorDate:todayISO()};
-  const mode=routineModeV109(r),months=r.months?.length?r.months:[Number(r.month||1)];
-  modal(`<h2>${id?'编辑':'新建'} Routine</h2>
-    <div class="form-row"><div class="form-field"><label>名称</label><input id="rName" value="${esc(r.name)}"></div><div class="form-field"><label>图标</label><input id="rIcon" value="${esc(r.icon||'●')}" maxlength="4"></div></div>
-    <div class="form-field"><label>标签</label><input id="rTags" value="${esc((r.tags||[]).join(', '))}"></div>
-    <div class="form-field"><label>重复</label><select id="rRepeatV109" onchange="toggleRoutineFieldsV109()">
-      <option value="daily" ${mode==='daily'?'selected':''}>每天</option><option value="weekdays" ${mode==='weekdays'?'selected':''}>工作日</option><option value="custom" ${mode==='custom'?'selected':''}>指定星期</option><option value="monthly" ${mode==='monthly'?'selected':''}>每月指定日期</option><option value="monthend" ${mode==='monthend'?'selected':''}>每月最后一天</option><option value="quarterly" ${mode==='quarterly'?'selected':''}>每3个月</option><option value="yearly" ${mode==='yearly'?'selected':''}>每年指定月份</option>
-    </select></div>
-    <div id="rWeekBoxV109"><div class="field-hint-v109">工作日默认周一～周五；如果只勾周五，则日历只在周五显示。</div>${['日','一','二','三','四','五','六'].map((n,i)=>`<label class="checkbox-line"><input type="checkbox" class="rWeek" value="${i}" ${(r.weekdays||[]).map(Number).includes(i)?'checked':''}>周${n}</label>`).join('')}</div>
-    <div id="rDayBoxV109" class="form-field"><label>执行日</label><input id="rMonthDayV109" type="number" min="1" max="31" value="${r.monthDay||1}"></div>
-    <div id="rAnchorBoxV109" class="form-field"><label>每3个月起算日期</label><input id="rAnchorV109" type="date" value="${esc(r.anchorDate||todayISO())}"></div>
-    <div id="rMonthsBoxV109" class="form-field"><label>每年执行月份（可多选，例如 4月 + 8月）</label><div class="month-picks-v109">${Array.from({length:12},(_,i)=>i+1).map(m=>`<label><input type="checkbox" class="rMonthV109" value="${m}" ${months.includes(m)?'checked':''}>${m}月</label>`).join('')}</div></div>
-    <label id="rMonthEndBoxV109" class="checkbox-line"><input id="rMonthEndV109" type="checkbox" ${r.monthEnd?'checked':''}>该月最后一天执行</label>
-    <h3>子任务</h3><div id="rSubs">${(r.subtasks||[]).map(routineSubEditRow).join('')}</div><button class="small-btn" onclick="$('#rSubs').insertAdjacentHTML('beforeend',routineSubEditRow({id:uid(),title:''}))">＋子任务</button>
-    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRoutineV109('${id||''}')">保存</button></div>`);
-  setTimeout(toggleRoutineFieldsV109,0);
-}
-async function saveRoutineV109(id){
-  const months=$$('.rMonthV109:checked').map(x=>Number(x.value));
-  const old=id?state.routines.find(x=>x.id===id):null;
-  const x={...(old||{}),id:id||uid(),name:$('#rName').value.trim(),icon:($('#rIcon').value.trim()||'●'),tags:splitTags($('#rTags').value),repeat:$('#rRepeatV109').value,repeatV109:$('#rRepeatV109').value,weekdays:$$('.rWeek:checked').map(x=>Number(x.value)),monthDay:Number($('#rMonthDayV109')?.value||1),anchorDate:$('#rAnchorV109')?.value||todayISO(),months:months.length?months:[1],month:Number(months[0]||1),monthEnd:!!$('#rMonthEndV109')?.checked,subtasks:$$('.rsub').map(e=>({id:e.dataset.id,title:e.querySelector('.rsub-title').value.trim()})).filter(x=>x.title)};
-  if(id)state.routines[state.routines.findIndex(r=>r.id===id)]=x;else state.routines.push(x);
-  await saveState();closeModal();renderAll();
-}
-function cloneRoutineSnapshot(r){return{name:r.name,icon:r.icon||'●',tags:[...(r.tags||[])],repeat:r.repeat,repeatV109:r.repeatV109||r.repeat,weekdays:[...(r.weekdays||[])],monthDay:r.monthDay||1,anchorDate:r.anchorDate||'',months:[...(r.months||[])],month:r.month||1,monthEnd:!!r.monthEnd,subtasks:(r.subtasks||[]).map(s=>({id:uid(),title:s.title}))}}
-/* ======================= END V10.9 ======================= */
-
-
-/* ======================= V10.10 MULTI RECURRENCE CONDITIONS ======================= */
-
-/* ---------- generic condition helpers ---------- */
-function recurrenceCondMatchV1010(cond,dateStr){
-  const p=datePartsV109(dateStr);
-  const type=cond?.type||'weekly';
-
-  if(type==='daily') return true;
-
-  if(type==='weekly'){
-    const weekdays=(cond.weekdays||[]).map(Number);
-    return weekdays.includes(p.weekday);
-  }
-
+function condMatchV1011(c,ds){
+  const p=recDatePartsV1011(ds), type=c?.type||'weekly';
+  if(type==='daily')return true;
+  if(type==='weekly')return (c.weekdays||[]).map(Number).includes(p.wd);
+  if(type==='monthend')return p.d===recLastDayV1011(p.y,p.m);
   if(type==='monthly'){
-    if(cond.monthEnd) return p.d===lastDayOfMonthV109(p.y,p.m);
-    return p.d===Math.min(Number(cond.day||1),lastDayOfMonthV109(p.y,p.m));
+    if(c.monthEnd)return p.d===recLastDayV1011(p.y,p.m);
+    return p.d===Math.min(Number(c.day||1),recLastDayV1011(p.y,p.m));
   }
-
-  if(type==='monthend'){
-    return p.d===lastDayOfMonthV109(p.y,p.m);
-  }
-
   if(type==='quarterly'){
-    const ap=datePartsV109(cond.anchorDate||todayISO());
-    const diff=monthsSinceV109(ap.dt,p.dt);
-    if(diff<0 || diff%3!==0) return false;
-    const day=cond.monthEnd
-      ? lastDayOfMonthV109(p.y,p.m)
-      : Math.min(Number(cond.day||ap.d||1),lastDayOfMonthV109(p.y,p.m));
-    return p.d===day;
+    const ap=recDatePartsV1011(c.anchorDate||todayISO());
+    const diff=recMonthsDiffV1011(ap.dt,p.dt);
+    if(diff<0||diff%3!==0)return false;
+    if(c.monthEnd)return p.d===recLastDayV1011(p.y,p.m);
+    return p.d===Math.min(Number(c.day||ap.d||1),recLastDayV1011(p.y,p.m));
   }
-
   if(type==='yearly'){
-    const months=(cond.months?.length?cond.months:[1]).map(Number);
-    if(!months.includes(p.m)) return false;
-    if(cond.monthEnd) return p.d===lastDayOfMonthV109(p.y,p.m);
-    return p.d===Math.min(Number(cond.day||1),lastDayOfMonthV109(p.y,p.m));
+    const months=(c.months||[]).map(Number);
+    if(!months.includes(p.m))return false;
+    if(c.monthEnd)return p.d===recLastDayV1011(p.y,p.m);
+    return p.d===Math.min(Number(c.day||1),recLastDayV1011(p.y,p.m));
   }
-
   return false;
 }
-function recurrenceConditionsMatchV1010(conditions,logic,dateStr){
-  const cs=(conditions||[]).filter(Boolean);
-  if(!cs.length)return false;
+function conditionsMatchV1011(conds,logic,ds){
+  const list=(conds||[]).filter(Boolean);
+  if(!list.length)return false;
   return String(logic||'OR').toUpperCase()==='AND'
-    ? cs.every(c=>recurrenceCondMatchV1010(c,dateStr))
-    : cs.some(c=>recurrenceCondMatchV1010(c,dateStr));
+    ? list.every(c=>condMatchV1011(c,ds))
+    : list.some(c=>condMatchV1011(c,ds));
 }
-function defaultConditionFromLegacyKanbanV1010(r){
-  const f=r?.freq||r?.frequency||'monthly';
-  if(f==='weekly') return {type:'weekly',weekdays:[Number(r.weekday??1)]};
-  if(f==='monthly') return {type:'monthly',day:Number(r.day||1),monthEnd:!!r.monthEnd};
-  if(f==='monthend') return {type:'monthend'};
-  if(f==='quarterly') return {type:'quarterly',day:Number(r.day||1),monthEnd:!!r.monthEnd,anchorDate:r.anchorDate||todayISO()};
-  if(f==='yearly') return {type:'yearly',day:Number(r.day||1),monthEnd:!!r.monthEnd,months:(r.months?.length?r.months:[Number(r.month||1)])};
-  return {type:'daily'};
-}
-function defaultConditionFromLegacyRoutineV1010(r){
-  const mode=routineRepeatModeV109(r);
-  if(mode==='daily') return {type:'daily'};
-  if(mode==='weekdays') return {type:'weekly',weekdays:[1,2,3,4,5]};
-  if(mode==='custom') return {type:'weekly',weekdays:(r.weekdays||[]).map(Number)};
-  if(mode==='monthly') return {type:'monthly',day:Number(r.monthDay||1),monthEnd:!!r.monthEnd};
-  if(mode==='monthend') return {type:'monthend'};
-  if(mode==='quarterly') return {type:'quarterly',day:Number(r.monthDay||1),monthEnd:!!r.monthEnd,anchorDate:r.anchorDate||todayISO()};
-  if(mode==='yearly') return {type:'yearly',day:Number(r.monthDay||1),monthEnd:!!r.monthEnd,months:(r.months?.length?r.months:[Number(r.month||1)])};
-  return {type:'weekly',weekdays:[1,2,3,4,5]};
-}
-function recurrenceCondSummaryV1010(c){
+function condSummaryV1011(c){
+  const wn=['日','一','二','三','四','五','六'];
   if(c.type==='daily')return '每天';
-  if(c.type==='weekly'){
-    const names=['日','一','二','三','四','五','六'];
-    return '每周 '+(c.weekdays||[]).map(x=>'周'+names[Number(x)]).join('、');
-  }
-  if(c.type==='monthly')return c.monthEnd?'每月最后一天':`每月${Number(c.day||1)}日`;
+  if(c.type==='weekly')return '每周'+(c.weekdays||[]).map(x=>'周'+wn[Number(x)]).join('、');
   if(c.type==='monthend')return '每月最后一天';
-  if(c.type==='quarterly')return `每3个月${c.monthEnd?'月末':Number(c.day||1)+'日'}`;
-  if(c.type==='yearly')return `每年${(c.months||[]).join('、')}月${c.monthEnd?'月末':Number(c.day||1)+'日'}`;
+  if(c.type==='monthly')return c.monthEnd?'每月最后一天':`每月${c.day||1}日`;
+  if(c.type==='quarterly')return `每3个月${c.monthEnd?'月末':(c.day||1)+'日'}`;
+  if(c.type==='yearly')return `每年${(c.months||[]).join('、')}月${c.monthEnd?'月末':(c.day||1)+'日'}`;
   return '';
 }
 
-/* ---------- condition editor UI ---------- */
-function conditionEditorHtmlV1010(c={},kind='kanban'){
-  const id=c._uiid||uid();
-  const type=c.type||'weekly';
-  const weekdays=(c.weekdays||[5]).map(Number);
-  const months=(c.months||[1]).map(Number);
-  return `<div class="repeat-cond-v1010" data-id="${id}">
-    <div class="repeat-cond-head-v1010">
-      <select class="rcType" onchange="refreshConditionRowV1010(this)">
+function recConditionRowV1011(c={}){
+  const type=c.type||'weekly', w=(c.weekdays||[5]).map(Number), months=(c.months||[4,8]).map(Number);
+  return `<div class="rec-rule-v1011">
+    <div class="rec-rule-head-v1011">
+      <select class="recType" onchange="refreshRecRowV1011(this)">
         <option value="daily" ${type==='daily'?'selected':''}>每天</option>
         <option value="weekly" ${type==='weekly'?'selected':''}>每周指定星期</option>
         <option value="monthly" ${type==='monthly'?'selected':''}>每月指定日期</option>
@@ -3191,161 +2998,129 @@ function conditionEditorHtmlV1010(c={},kind='kanban'){
         <option value="quarterly" ${type==='quarterly'?'selected':''}>每3个月</option>
         <option value="yearly" ${type==='yearly'?'selected':''}>每年指定月份</option>
       </select>
-      <button type="button" class="danger-mini-v1010" onclick="this.closest('.repeat-cond-v1010').remove()">✕</button>
+      <button type="button" class="rec-remove-v1011" onclick="this.closest('.rec-rule-v1011').remove()">✕</button>
     </div>
-    <div class="rcWeekly rcDetail" style="${type==='weekly'?'':'display:none'}">
-      <div class="weekday-picks-v1010">
-        ${['日','一','二','三','四','五','六'].map((n,i)=>`<label><input type="checkbox" class="rcWeekday" value="${i}" ${weekdays.includes(i)?'checked':''}>周${n}</label>`).join('')}
+    <div class="recWeekly rec-detail-v1011" style="${type==='weekly'?'':'display:none'}">
+      <div class="rec-weekdays-v1011">
+        ${['日','一','二','三','四','五','六'].map((n,i)=>`<label><input type="checkbox" class="recWeek" value="${i}" ${w.includes(i)?'checked':''}>周${n}</label>`).join('')}
       </div>
     </div>
-    <div class="rcDay rcDetail" style="${['monthly','quarterly','yearly'].includes(type)?'':'display:none'}">
-      <label>执行日 <input class="rcDayInput" type="number" min="1" max="31" value="${Number(c.day||1)}"></label>
-      <label><input type="checkbox" class="rcMonthEnd" ${c.monthEnd?'checked':''}> 该月最后一天</label>
+    <div class="recDay rec-detail-v1011" style="${['monthly','quarterly','yearly'].includes(type)?'':'display:none'}">
+      <label>执行日 <input type="number" class="recDayInput" min="1" max="31" value="${Number(c.day||1)}"></label>
+      <label><input type="checkbox" class="recMonthEnd" ${c.monthEnd?'checked':''}> 使用该月最后一天</label>
     </div>
-    <div class="rcQuarter rcDetail" style="${type==='quarterly'?'':'display:none'}">
-      <label>每3个月起算日期 <input class="rcAnchor" type="date" value="${esc(c.anchorDate||todayISO())}"></label>
+    <div class="recQuarter rec-detail-v1011" style="${type==='quarterly'?'':'display:none'}">
+      <label>起算日期 <input type="date" class="recAnchor" value="${esc(c.anchorDate||todayISO())}"></label>
     </div>
-    <div class="rcYear rcDetail" style="${type==='yearly'?'':'display:none'}">
-      <div class="month-picks-v109">
-        ${Array.from({length:12},(_,i)=>i+1).map(m=>`<label><input type="checkbox" class="rcMonth" value="${m}" ${months.includes(m)?'checked':''}>${m}月</label>`).join('')}
+    <div class="recYear rec-detail-v1011" style="${type==='yearly'?'':'display:none'}">
+      <div class="rec-months-v1011">
+        ${Array.from({length:12},(_,i)=>i+1).map(m=>`<label><input type="checkbox" class="recMonth" value="${m}" ${months.includes(m)?'checked':''}>${m}月</label>`).join('')}
       </div>
     </div>
   </div>`;
 }
-function refreshConditionRowV1010(sel){
-  const row=sel.closest('.repeat-cond-v1010'), type=sel.value;
-  row.querySelectorAll('.rcDetail').forEach(x=>x.style.display='none');
-  if(type==='weekly')row.querySelector('.rcWeekly').style.display='';
-  if(['monthly','quarterly','yearly'].includes(type))row.querySelector('.rcDay').style.display='';
-  if(type==='quarterly')row.querySelector('.rcQuarter').style.display='';
-  if(type==='yearly')row.querySelector('.rcYear').style.display='';
+function refreshRecRowV1011(sel){
+  const row=sel.closest('.rec-rule-v1011'),t=sel.value;
+  row.querySelectorAll('.rec-detail-v1011').forEach(x=>x.style.display='none');
+  if(t==='weekly')row.querySelector('.recWeekly').style.display='';
+  if(['monthly','quarterly','yearly'].includes(t))row.querySelector('.recDay').style.display='';
+  if(t==='quarterly')row.querySelector('.recQuarter').style.display='';
+  if(t==='yearly')row.querySelector('.recYear').style.display='';
 }
-function addConditionV1010(containerId,kind){
-  const box=document.getElementById(containerId);if(!box)return;
-  box.insertAdjacentHTML('beforeend',conditionEditorHtmlV1010({type:'weekly',weekdays:[5]},kind));
+function addRecRuleV1011(boxId){
+  const box=document.getElementById(boxId);if(box)box.insertAdjacentHTML('beforeend',recConditionRowV1011({type:'weekly',weekdays:[5]}));
 }
-function collectConditionsV1010(containerId){
-  const box=document.getElementById(containerId);if(!box)return[];
-  return [...box.querySelectorAll('.repeat-cond-v1010')].map(row=>{
-    const type=row.querySelector('.rcType').value;
-    const c={type};
-    if(type==='weekly')c.weekdays=[...row.querySelectorAll('.rcWeekday:checked')].map(x=>Number(x.value));
+function collectRecRulesV1011(boxId){
+  const box=document.getElementById(boxId);if(!box)return[];
+  return [...box.querySelectorAll('.rec-rule-v1011')].map(row=>{
+    const type=row.querySelector('.recType').value,c={type};
+    if(type==='weekly')c.weekdays=[...row.querySelectorAll('.recWeek:checked')].map(x=>Number(x.value));
     if(['monthly','quarterly','yearly'].includes(type)){
-      c.day=Number(row.querySelector('.rcDayInput')?.value||1);
-      c.monthEnd=!!row.querySelector('.rcMonthEnd')?.checked;
+      c.day=Number(row.querySelector('.recDayInput')?.value||1);
+      c.monthEnd=!!row.querySelector('.recMonthEnd')?.checked;
     }
-    if(type==='quarterly')c.anchorDate=row.querySelector('.rcAnchor')?.value||todayISO();
-    if(type==='yearly')c.months=[...row.querySelectorAll('.rcMonth:checked')].map(x=>Number(x.value));
+    if(type==='quarterly')c.anchorDate=row.querySelector('.recAnchor')?.value||todayISO();
+    if(type==='yearly')c.months=[...row.querySelectorAll('.recMonth:checked')].map(x=>Number(x.value));
     return c;
-  }).filter(c=>c.type!=='weekly'||c.weekdays.length);
+  }).filter(c=>c.type!=='weekly'||c.weekdays.length).filter(c=>c.type!=='yearly'||c.months.length);
 }
 
-/* ---------- Kanban multi-condition recurrence ---------- */
-function kanbanRecurringMatchesDateV109(rule,dateStr){
-  if(!rule?.enabled)return false;
-  if(rule.conditionsV1010?.length){
-    return recurrenceConditionsMatchV1010(rule.conditionsV1010,rule.logicV1010||'OR',dateStr);
-  }
-  return recurrenceCondMatchV1010(defaultConditionFromLegacyKanbanV1010(rule),dateStr);
-}
-function openRecurringModal(cardId){
-  const card=state.kanban.find(x=>x.id===cardId);if(!card)return;
-  const existing=(state.kanbanRecurring||[]).find(x=>x.sourceCardId===cardId);
-  const r=existing||{id:uid(),sourceCardId:cardId,enabled:true,targetColumnId:card.status||state.kanbanColumns?.[0]?.id||'todo',snapshot:recurringSnapshotFromCard(card)};
-  const conditions=r.conditionsV1010?.length?r.conditionsV1010:[defaultConditionFromLegacyKanbanV1010(r)];
-  modal(`<h2>🔁 定期重复</h2>
-    <div class="form-field">
-      <label>多个条件之间</label>
-      <select id="krLogicV1010">
-        <option value="OR" ${(r.logicV1010||'OR')==='OR'?'selected':''}>OR / 或：满足任意一个就执行</option>
-        <option value="AND" ${r.logicV1010==='AND'?'selected':''}>AND / 且：必须同时满足才执行</option>
-      </select>
-      <div class="hint-v1010">例：每周五 + 每月最后一天，请选 OR。</div>
-    </div>
-    <div id="krConditionsV1010">${conditions.map(c=>conditionEditorHtmlV1010(c,'kanban')).join('')}</div>
-    <button class="small-btn" onclick="addConditionV1010('krConditionsV1010','kanban')">＋ 添加重复条件</button>
-    <div class="form-field" style="margin-top:12px"><label>自动生成到哪一列</label>
-      <select id="krTarget">${state.kanbanColumns.map(c=>`<option value="${c.id}" ${r.targetColumnId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select>
-    </div>
-    <label class="checkbox-line"><input type="checkbox" id="krEnabled" ${r.enabled!==false?'checked':''}>启用</label>
-    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRecurringV1010('${cardId}','${r.id||''}')">保存</button></div>`);
-}
-async function saveRecurringV1010(cardId,ruleId){
-  const card=state.kanban.find(x=>x.id===cardId);if(!card)return;
-  state.kanbanRecurring??=[];
-  let r=state.kanbanRecurring.find(x=>x.id===ruleId||x.sourceCardId===cardId);
-  if(!r){r={id:uid(),sourceCardId:cardId};state.kanbanRecurring.push(r);}
-  const conditions=collectConditionsV1010('krConditionsV1010');
-  if(!conditions.length){toast('至少设置一个有效的重复条件');return;}
-  Object.assign(r,{
-    sourceCardId:cardId,
-    enabled:$('#krEnabled').checked,
-    logicV1010:$('#krLogicV1010').value,
-    conditionsV1010:conditions,
-    targetColumnId:$('#krTarget').value,
-    snapshot:recurringSnapshotFromCard(card)
-  });
-  await saveState();closeModal();renderKanban();toast('定期重复已保存');
-}
-
-/* ---------- Routine multi-condition recurrence ---------- */
+/* ----- Routine ----- */
 function isRoutineDue(r,dateStr){
-  if(r.conditionsV1010?.length){
-    return recurrenceConditionsMatchV1010(r.conditionsV1010,r.logicV1010||'OR',dateStr);
-  }
-  return recurrenceCondMatchV1010(defaultConditionFromLegacyRoutineV1010(r),dateStr);
+  const conditions=r.recConditionsV1011?.length?r.recConditionsV1011:[legacyRoutineConditionV1011(r)];
+  return conditionsMatchV1011(conditions,r.recLogicV1011||'OR',dateStr);
 }
 function repeatText(r){
-  if(r.conditionsV1010?.length){
-    const joiner=(r.logicV1010||'OR')==='AND'?' AND ':' OR ';
-    return r.conditionsV1010.map(recurrenceCondSummaryV1010).join(joiner);
-  }
-  return recurrenceCondSummaryV1010(defaultConditionFromLegacyRoutineV1010(r));
+  const conditions=r.recConditionsV1011?.length?r.recConditionsV1011:[legacyRoutineConditionV1011(r)];
+  return conditions.map(condSummaryV1011).join((r.recLogicV1011||'OR')==='AND'?' AND ':' OR ');
 }
 function openRoutineModal(id){
-  const r=state.routines.find(x=>x.id===id)||{name:'',weekdays:[1,2,3,4,5],subtasks:[],tags:[],icon:'●'};
-  const conditions=r.conditionsV1010?.length?r.conditionsV1010:[defaultConditionFromLegacyRoutineV1010(r)];
+  const r=state.routines.find(x=>x.id===id)||{name:'',repeat:'weekdays',weekdays:[1,2,3,4,5],subtasks:[],tags:[],icon:'●'};
+  const conditions=r.recConditionsV1011?.length?r.recConditionsV1011:[legacyRoutineConditionV1011(r)];
   modal(`<h2>${id?'编辑':'新建'} Routine</h2>
-    <div class="form-row">
-      <div class="form-field"><label>名称</label><input id="rName" value="${esc(r.name)}"></div>
-      <div class="form-field"><label>图标</label><input id="rIcon" value="${esc(r.icon||'●')}" maxlength="4" placeholder="例如 ✉ ★ ♥"></div>
-    </div>
+    <div class="form-row"><div class="form-field"><label>名称</label><input id="rName" value="${esc(r.name)}"></div><div class="form-field"><label>图标</label><input id="rIcon" value="${esc(r.icon||'●')}" maxlength="4"></div></div>
     <div class="form-field"><label>标签</label><input id="rTags" value="${esc((r.tags||[]).join(', '))}"></div>
-
-    <div class="form-field">
-      <label>多个重复条件之间</label>
-      <select id="rLogicV1010">
-        <option value="OR" ${(r.logicV1010||'OR')==='OR'?'selected':''}>OR / 或：满足任意一个就执行</option>
-        <option value="AND" ${r.logicV1010==='AND'?'selected':''}>AND / 且：必须同时满足才执行</option>
-      </select>
-      <div class="hint-v1010">工时例：每周五 OR 每月最后一天。</div>
-    </div>
-
-    <div id="rConditionsV1010">${conditions.map(c=>conditionEditorHtmlV1010(c,'routine')).join('')}</div>
-    <button class="small-btn" onclick="addConditionV1010('rConditionsV1010','routine')">＋ 添加重复条件</button>
-
-    <h3>子任务</h3>
-    <div id="rSubs">${(r.subtasks||[]).map(routineSubEditRow).join('')}</div>
+    <div class="form-field"><label>多个条件之间</label><select id="rRecLogic">
+      <option value="OR" ${(r.recLogicV1011||'OR')==='OR'?'selected':''}>OR / 或：任意条件满足即可</option>
+      <option value="AND" ${r.recLogicV1011==='AND'?'selected':''}>AND / 且：所有条件同时满足</option>
+    </select><div class="item-meta">例：每周五 OR 每月最后一天</div></div>
+    <div id="rRecRules">${conditions.map(recConditionRowV1011).join('')}</div>
+    <button class="small-btn" type="button" onclick="addRecRuleV1011('rRecRules')">＋ 添加重复条件</button>
+    <h3>子任务</h3><div id="rSubs">${(r.subtasks||[]).map(routineSubEditRow).join('')}</div>
     <button class="small-btn" onclick="$('#rSubs').insertAdjacentHTML('beforeend',routineSubEditRow({id:uid(),title:''}))">＋子任务</button>
-
-    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRoutineV1010('${id||''}')">保存</button></div>`);
+    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRoutineV1011('${id||''}')">保存</button></div>`);
 }
-async function saveRoutineV1010(id){
-  const conditions=collectConditionsV1010('rConditionsV1010');
-  if(!conditions.length){toast('至少设置一个有效的重复条件');return;}
+async function saveRoutineV1011(id){
+  const rules=collectRecRulesV1011('rRecRules');
+  if(!rules.length){toast('请至少设置一个有效的重复条件');return}
   const old=id?state.routines.find(x=>x.id===id):null;
-  const x={
-    ...(old||{}),
-    id:id||uid(),
-    name:$('#rName').value.trim(),
-    icon:($('#rIcon').value.trim()||'●'),
-    tags:splitTags($('#rTags').value),
-    logicV1010:$('#rLogicV1010').value,
-    conditionsV1010:conditions,
-    subtasks:$$('.rsub').map(e=>({id:e.dataset.id,title:e.querySelector('.rsub-title').value.trim()})).filter(x=>x.title)
-  };
-  if(id)state.routines[state.routines.findIndex(r=>r.id===id)]=x;
-  else state.routines.push(x);
+  const x={...(old||{}),id:id||uid(),name:$('#rName').value.trim(),icon:$('#rIcon').value.trim()||'●',tags:splitTags($('#rTags').value),
+    recLogicV1011:$('#rRecLogic').value,recConditionsV1011:rules,
+    subtasks:$$('.rsub').map(e=>({id:e.dataset.id,title:e.querySelector('.rsub-title').value.trim()})).filter(x=>x.title)};
+  if(id)state.routines[state.routines.findIndex(v=>v.id===id)]=x;else state.routines.push(x);
   await saveState();closeModal();renderAll();
 }
-/* ======================= END V10.10 ======================= */
+
+/* ----- Kanban recurring ----- */
+function recurrenceDue(rule,d=new Date()){
+  const ds=recISOFromDateV1011(d);
+  const conditions=rule.recConditionsV1011?.length?rule.recConditionsV1011:[legacyKanbanConditionV1011(rule)];
+  return conditionsMatchV1011(conditions,rule.recLogicV1011||'OR',ds);
+}
+function recurrenceKey(rule,d=new Date()){
+  /* one generation per actual matched calendar day; this is required when one rule has Tue + Fri */
+  return recISOFromDateV1011(d);
+}
+function openRepeatModal(id){
+  const t=state.kanban.find(x=>x.id===id);if(!t)return;
+  const r=(state.kanbanRecurring||[]).find(x=>x.sourceCardId===id)||{targetColumnId:t.status,enabled:true};
+  const conditions=r.recConditionsV1011?.length?r.recConditionsV1011:[legacyKanbanConditionV1011(r)];
+  modal(`<h2>🔁 定期重复</h2>
+    <div class="form-field"><label>多个条件之间</label><select id="repLogicV1011">
+      <option value="OR" ${(r.recLogicV1011||'OR')==='OR'?'selected':''}>OR / 或：任意条件满足即可</option>
+      <option value="AND" ${r.recLogicV1011==='AND'?'selected':''}>AND / 且：所有条件同时满足</option>
+    </select><div class="item-meta">每周二和周五：只需在同一个“每周指定星期”条件里同时勾周二、周五。</div></div>
+    <div id="repRulesV1011">${conditions.map(recConditionRowV1011).join('')}</div>
+    <button class="small-btn" type="button" onclick="addRecRuleV1011('repRulesV1011')">＋ 添加重复条件</button>
+    <div class="form-field" style="margin-top:12px"><label>自动生成到哪一列</label><select id="repCol">${state.kanbanColumns.map(c=>`<option value="${c.id}" ${r.targetColumnId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div>
+    <label class="checkbox-line"><input id="repEnabled" type="checkbox" ${r.enabled!==false?'checked':''}>启用</label>
+    <div class="modal-actions"><button class="ghost-btn" onclick="closeModal()">取消</button><button class="primary-btn" onclick="saveRepeatRuleV1011('${id}')">保存</button></div>`);
+}
+async function saveRepeatRuleV1011(id){
+  const t=state.kanban.find(x=>x.id===id);if(!t)return;
+  const rules=collectRecRulesV1011('repRulesV1011');
+  if(!rules.length){toast('请至少设置一个有效的重复条件');return}
+  state.kanbanRecurring??=[];
+  let r=state.kanbanRecurring.find(x=>x.sourceCardId===id);
+  if(!r){r={id:uid(),sourceCardId:id};state.kanbanRecurring.push(r)}
+  Object.assign(r,{name:t.title,recLogicV1011:$('#repLogicV1011').value,recConditionsV1011:rules,targetColumnId:$('#repCol').value,enabled:$('#repEnabled').checked,snapshot:recurringSnapshotFromCard(t)});
+  ensureRecurringKanban();await saveState();closeModal();renderKanban();toast('定期重复已保存');
+}
+
+/* preserve new routine recurrence in templates without breaking old templates */
+function cloneRoutineSnapshot(r){
+  return {name:r.name,icon:r.icon||'●',tags:[...(r.tags||[])],repeat:r.repeat,weekdays:[...(r.weekdays||[])],
+    recLogicV1011:r.recLogicV1011||'OR',recConditionsV1011:structuredClone(r.recConditionsV1011||[]),
+    subtasks:(r.subtasks||[]).map(s=>({id:uid(),title:s.title}))};
+}
+/* ======================= END V10.11 ======================= */

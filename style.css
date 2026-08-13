@@ -342,18 +342,11 @@ input,select,textarea{width:100%;border:1px solid var(--line);border-radius:11px
   margin-top:8px;
 }
 
-/* V10.9 */
-.month-picks-v109{display:grid;grid-template-columns:repeat(6,minmax(70px,1fr));gap:7px}.month-picks-v109 label{display:flex;align-items:center;gap:5px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff}.field-hint-v109{font-size:12px;color:var(--muted);margin:3px 0 8px}@media(max-width:800px){.month-picks-v109{grid-template-columns:repeat(3,1fr)}}
-
-/* V10.10 */
-.repeat-cond-v1010{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:8px 0;background:#fafbfe}
-.repeat-cond-head-v1010{display:flex;gap:8px;align-items:center}
-.repeat-cond-head-v1010 select{flex:1}
-.danger-mini-v1010{border:1px solid #ffd4d4;background:#fff5f5;color:#e05b5b;border-radius:8px;padding:6px 9px;cursor:pointer}
-.weekday-picks-v1010{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
-.weekday-picks-v1010 label{display:flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:8px;padding:6px 8px;background:#fff}
-.rcDetail{margin-top:9px}
-.rcDay{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
-.rcDay label,.rcQuarter label{display:flex;align-items:center;gap:7px}
-.rcDay input[type=number]{width:90px}
-.hint-v1010{font-size:12px;color:var(--muted);margin-top:5px}
+/* V10.11 recurrence editor */
+.rec-rule-v1011{border:1px solid var(--line);border-radius:12px;background:#fafbfe;padding:10px 12px;margin:8px 0}
+.rec-rule-head-v1011{display:flex;gap:8px;align-items:center}.rec-rule-head-v1011 select{flex:1}
+.rec-remove-v1011{border:1px solid #ffd2d2;background:#fff5f5;color:#dc5a5a;border-radius:8px;padding:7px 10px;cursor:pointer}
+.rec-detail-v1011{margin-top:10px}.rec-weekdays-v1011,.rec-months-v1011{display:flex;flex-wrap:wrap;gap:7px}
+.rec-weekdays-v1011 label,.rec-months-v1011 label{display:flex;align-items:center;gap:4px;background:white;border:1px solid var(--line);border-radius:8px;padding:6px 9px}
+.recDay,.recQuarter{display:flex;gap:18px;align-items:center;flex-wrap:wrap}.recDay label,.recQuarter label{display:flex;align-items:center;gap:6px}
+.recDayInput{width:90px}
